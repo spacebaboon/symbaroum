@@ -5,3 +5,4 @@ marker_output_no_ocr/
 __pycache__/
 *.pyc
 .env
+.venv

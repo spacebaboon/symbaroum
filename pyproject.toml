@@ -1,0 +1,12 @@
+[project]
+name = "symbaroum"
+version = "0.1.0"
+description = "Add your description here"
+requires-python = ">=3.12"
+dependencies = [
+    "llama-index>=0.14.18",
+    "llama-index-embeddings-ollama>=0.9.0",
+    "llama-index-llms-ollama>=0.10.1",
+    "marker-pdf>=1.10.2",
+    "python-dotenv>=1.2.2",
+]
