@@ -14,8 +14,9 @@ EMBED_MODEL = "nomic-embed-text"
 # Set up models
 Settings.llm = Ollama(
     model=LLM_MODEL,
-    request_timeout=120.0,
-    temperature=0.1  # Low temp for factual rules queries
+    request_timeout=240.0,  # Increase timeout for longer responses
+    temperature=0.1, # Low temp for factual rules queries
+    context_window=8192,
 )
 Settings.embed_model = OllamaEmbedding(model_name=EMBED_MODEL)
 
@@ -48,21 +49,27 @@ else:
 
 # Query loop
 query_engine = index.as_query_engine(
-    similarity_top_k=5,
-    streaming=False
+    similarity_top_k=10,
+    response_mode="tree_summarize",  # Better for longer, comprehensive answers
 )
+
+# For debugging, use retriever directly
+retriever = index.as_retriever(similarity_top_k=10)
 
 print("\nSymbaroum RAG ready. Type 'quit' to exit.\n")
 while True:
     query = input("Query: ").strip()
     if query.lower() in ("quit", "exit", "q"):
         break
-    if not query:
-        continue
+    retrieved = retriever.retrieve(query)
+    print("\nRetrieved chunks:")
+    for i, node in enumerate(retrieved):
+        print(f"\n[{i+1}] Score: {node.score:.3f}")
+        print(node.text[:200])
     print("\nThinking...\n")
     start = time.time()
     response = query_engine.query(query)
     elapsed = time.time() - start
-    print(f"Answer:\n{response}\n")
+    print(f"\nAnswer:\n{response}\n")
     print(f"Time: {elapsed:.1f}s")
     print("-" * 60 + "\n")
