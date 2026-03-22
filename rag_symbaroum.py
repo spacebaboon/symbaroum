@@ -3,9 +3,12 @@ import time
 from dotenv import load_dotenv
 from llama_index.core import VectorStoreIndex, SimpleDirectoryReader, Settings, PromptTemplate
 from llama_index.core import StorageContext, load_index_from_storage
+from llama_index.core.query_engine import RetrieverQueryEngine
+from llama_index.core.retrievers import QueryFusionRetriever
 from llama_index.llms.ollama import Ollama
 from llama_index.embeddings.ollama import OllamaEmbedding
 from llama_index.core.node_parser import MarkdownNodeParser, SentenceSplitter
+from llama_index.retrievers.bm25 import BM25Retriever
 
 # Load environment variables
 load_dotenv()
@@ -72,23 +75,41 @@ else:
 
 # Custom prompt for detailed answers
 qa_prompt = PromptTemplate(
-    "You are an expert on the Symbaroum tabletop RPG rules. "
+    "You are an expert on the Symbaroum tabletop RPG rules and the tutorial adventure 'The Promised Land'. "
     "Using the context below, provide a thorough and complete answer. "
-    "Include all relevant mechanics, numbers, and special cases. "
+    "For rules queries: include all relevant mechanics, numbers, special cases, and cite specific ability or condition names. "
+    "For adventure queries: provide information and summaries useful to the Game Master, "
+    "including relevant NPCs, locations, challenges, and rewards. "
     "If the context is insufficient, say so clearly.\n\n"
     "Context:\n{context_str}\n\n"
     "Question: {query_str}\n\n"
     "Detailed Answer:"
 )
 
-# Query engine and retriever
-query_engine = index.as_query_engine(
+# Vector retriever
+vector_retriever = index.as_retriever(similarity_top_k=10)
+
+# BM25 retriever - keyword matching
+bm25_retriever = BM25Retriever.from_defaults(
+    index=index,
     similarity_top_k=10,
+)
+
+# Hybrid retriever combining both
+retriever = QueryFusionRetriever(
+    retrievers=[vector_retriever, bm25_retriever],
+    similarity_top_k=10,
+    num_queries=1,  # don't generate additional queries
+    mode="reciprocal_rerank",  # combines scores from both retrievers
+    use_async=False,
+)
+
+# Query engine using hybrid retriever
+query_engine = RetrieverQueryEngine.from_args(
+    retriever=retriever,
     response_mode="tree_summarize",
 )
 query_engine.update_prompts({"response_synthesizer:text_qa_template": qa_prompt})
-
-retriever = index.as_retriever(similarity_top_k=10)
 
 print("\nSymbaroum RAG ready. Type 'quit' to exit.\n")
 while True:
@@ -98,9 +119,10 @@ while True:
     if not query:
         continue
 
-    retrieved = retriever.retrieve(query)
+    # Debug retrieved chunks
+    nodes_with_scores = retriever.retrieve(query)
     print("\nRetrieved chunks:")
-    for i, node in enumerate(retrieved):
+    for i, node in enumerate(nodes_with_scores):
         print(f"\n[{i+1}] Score: {node.score:.3f}")
         print(node.text[:200])
 
