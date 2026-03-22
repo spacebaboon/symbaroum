@@ -1,6 +1,7 @@
 index/
 marker_output/
 marker_output_no_ocr/
+bm25_index/
 *.pdf
 __pycache__/
 *.pyc
