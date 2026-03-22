@@ -51,6 +51,18 @@ def extract_keywords(query: str) -> str:
     )
     return str(response).strip()
 
+def rewrite_query(query: str) -> str:
+    response = Settings.llm.complete(
+        "Rewrite this query to improve search retrieval against a Symbaroum RPG rulebook. "
+        "Only use terms and names that are explicitly mentioned in the original query. "
+        "Do not add names, factions, or terms not present in the original. "
+        "Make the query more specific by expanding abbreviations and clarifying intent. "
+        "Return only the rewritten query:\n"
+        f"Original: {query}\n"
+        "Rewritten:"
+    )
+    return str(response).strip()
+
 if os.path.exists(INDEX_DIR) and os.path.exists(BM25_PATH):
     print("Loading existing index...")
     storage_context = StorageContext.from_defaults(persist_dir=INDEX_DIR)
@@ -74,20 +86,17 @@ else:
     md_parser = MarkdownNodeParser()
     md_nodes = md_parser.get_nodes_from_documents(documents)
 
-    splitter = SentenceSplitter(chunk_size=256, chunk_overlap=25)
+    splitter = SentenceSplitter(chunk_size=512, chunk_overlap=50)
     nodes = []
     for node in md_nodes:
-        if len(node.text) > 800:
+        if len(node.text) > 1500:
             sub_nodes = splitter.get_nodes_from_documents([node])
             nodes.extend(sub_nodes)
         else:
             nodes.append(node)
 
-    sizes = [(len(n.text), i) for i, n in enumerate(nodes)]
-    sizes.sort(reverse=True)
-    print(f"Largest chunks: {sizes[:5]}")
-
-    nodes = [n for n in nodes if len(n.text) < 1500]
+    # Safety net filter
+    nodes = [n for n in nodes if len(n.text) < 3000] 
     print(f"Created {len(nodes)} chunks")
 
     index = VectorStoreIndex(nodes, show_progress=True)
@@ -135,8 +144,12 @@ while True:
     if DEBUG:
         print(f"BM25 keywords: {keywords}")
 
+    rewritten = rewrite_query(query)
+    if DEBUG:
+        print(f"Rewritten query: {rewritten}")
+
     # Retrieve from both
-    vector_nodes = vector_retriever.retrieve(query)
+    vector_nodes = vector_retriever.retrieve(rewritten)
     bm25_nodes = bm25_retriever.retrieve(keywords)
 
     # Simple reciprocal rank fusion
@@ -163,7 +176,7 @@ while True:
     # Rerank fused results
     reranker = FlagEmbeddingReranker(
         model="BAAI/bge-reranker-base",
-        top_n=5,
+        top_n=8,
     )
     fused_with_scores = [NodeWithScore(node=n, score=seen_ids[n.node_id]) for n in fused]
     reranked = reranker.postprocess_nodes(fused_with_scores, query_bundle=QueryBundle(query))
