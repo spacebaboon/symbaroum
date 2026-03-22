@@ -24,6 +24,7 @@ INDEX_DIR = os.environ.get(
 )
 LLM_MODEL = os.environ.get("SYMBAROUM_LLM_MODEL", "qwen3:14b")
 EMBED_MODEL = os.environ.get("SYMBAROUM_EMBED_MODEL", "nomic-embed-text")
+DEBUG = os.environ.get("SYMBAROUM_DEBUG", "").lower() in ("1", "true", "yes")
 
 # Set up models
 Settings.llm = Ollama(
@@ -60,10 +61,10 @@ else:
         else:
             nodes.append(node)
 
-    # Debug: find largest chunks
-    sizes = [(len(n.text), i) for i, n in enumerate(nodes)]
-    sizes.sort(reverse=True)
-    print(f"Largest chunks: {sizes[:5]}")
+    if DEBUG:
+        sizes = [(len(n.text), i) for i, n in enumerate(nodes)]
+        sizes.sort(reverse=True)
+        print(f"Largest chunks: {sizes[:5]}")
 
     # Safety net filter
     nodes = [n for n in nodes if len(n.text) < 1500]
@@ -119,12 +120,12 @@ while True:
     if not query:
         continue
 
-    # Debug retrieved chunks
-    nodes_with_scores = retriever.retrieve(query)
-    print("\nRetrieved chunks:")
-    for i, node in enumerate(nodes_with_scores):
-        print(f"\n[{i+1}] Score: {node.score:.3f}")
-        print(node.text[:200])
+    if DEBUG:
+        nodes_with_scores = retriever.retrieve(query)
+        print("\nRetrieved chunks:")
+        for i, node in enumerate(nodes_with_scores):
+            print(f"\n[{i+1}] Score: {node.score:.3f}")
+            print(node.text[:200])
 
     print("\nThinking...\n")
     start = time.time()
