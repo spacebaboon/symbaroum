@@ -1,0 +1,194 @@
+Query: What is the Corruption mechanic and how does it affect characters?
+You're using a XLMRobertaTokenizerFast tokenizer. Please note that with a fast tokenizer, using the `__call__` method is faster than using a method to encode the text followed by a call to the `pad` method to get a padded encoding.
+
+Thinking...
+
+
+Answer:
+Corruption is a mechanic that reflects the dark consequences of manipulating mystical forces and the world's resistance to being controlled. It manifests in two forms: **temporary** and **permanent**. Temporary Corruption is fleeting, fading at the end of a scene, but it can accumulate to push a character’s total Corruption over critical thresholds. If temporary Corruption causes the character’s total Corruption to reach their **Corruption Threshold** (half their Resolute value), they receive a **permanent Stigma**—a lasting physical mark. If total Corruption (temporary + permanent) exceeds the Resolute value, the character becomes an **Abomination**, a fully corrupted being beyond salvation.  
+
+Permanent Corruption represents irreversible changes to a character’s essence. It accumulates through actions like learning mystic powers, binding artifacts, or enduring corruption-related events. Shadows, visible through abilities like **Witchsight**, reflect a character’s alignment with primal forces and their Corruption level—corrupted beings display darker, more distorted shadows. Corruption also influences gameplay through risks like **Stigmas**, **Blight-marked** status, and the eventual transformation into **blight beasts** or **Abominations**, which removes the character from player control.
+
+Time: 10.5s
+------------------------------------------------------------
+
+Query: How does combat initiative work in Symbaroum?
+
+Thinking...
+
+
+Answer:
+Combat initiative in Symbaroum determines the order in which characters and enemies act during combat. The process begins with specific conditions taking precedence:  
+
+1. **Long Weapons**: If a combatant wields a long weapon and the target does not, they may make a free attack at first contact during the initial turn of melee combat.  
+2. **Surprise**: If applicable, a *Vigilant* vs. *Discreet* test determines if an enemy is caught off guard, allowing a successful attacker to make a free attack at the start of the turn.  
+3. **Quick**: If neither long weapons nor surprise apply, the combatant with the highest *Quick* value acts first. *Quick* reflects reflexes and agility, often opposed by an enemy’s *Accurate*.  
+4. **Vigilant**: If multiple combatants share the same *Quick*, the highest *Vigilant* (representing awareness and preparedness) determines turn order.  
+5. **Tiebreaker**: If *Quick* and *Vigilant* are tied, a 1D20 roll decides initiative, with ties resolved until one combatant rolls higher.  
+6. **Delaying Initiative**: A combatant may choose to delay their action, allowing others to act first, though this delayed initiative remains fixed for the rest of the battle.  
+
+Each turn, characters typically perform two actions: a *Combat Action* (e.g., attacking) and a *Movement Action* (e.g., moving). Reactions, such as free attacks or defense tests, occur outside the initiative order as responses to other actions.
+
+Time: 16.1s
+------------------------------------------------------------
+
+Query: What is the difference between Toughness and Pain Threshold?
+
+Thinking...
+
+
+Answer:
+Toughness represents a creature's overall capacity to withstand damage, while Pain Threshold is a derived value calculated as half of Toughness (rounded up). When damage equal to or exceeding the Pain Threshold is applied (after accounting for armor), specific consequences occur, such as being knocked down or allowing an immediate free attack. Toughness itself is not directly modified by armor or traits, whereas Pain Threshold determines the threshold for these effects. For example, a creature with Toughness 10 has a Pain Threshold of 5, meaning damage reaching 5 (after armor) triggers the consequences.
+
+Time: 7.6s
+------------------------------------------------------------
+
+Query: Can a character use the Steadfast ability while being affected by the Confused condition?
+
+
+Thinking...
+
+
+Answer:
+Yes, a character can use the **Steadfast** ability while affected by the **Confused** condition, depending on the level of the ability. 
+
+- **Novice Steadfast** allows a second attempt to break ongoing physical effects (like those from Confusion) via a **Strong** or **Resolute** test. 
+- **Adept Steadfast** enables resisting ongoing powers affecting the will or senses, which includes the mental disruption caused by Confusion. 
+- **Master Steadfast** even allows the character to strike back against mental attacks, potentially turning the Confusion effect against the caster. 
+
+However, the **Confused** condition itself imposes specific behaviors (e.g., attacking allies or enemies randomly), which may limit the character’s ability to act coherently. The use of Steadfast would require a **Resolute** test to counter the effect, as Confusion is a mental influence.
+
+Time: 11.8s
+------------------------------------------------------------
+
+Query: Query: What abilities work well together for a combat-focused Warrior?
+
+Thinking...
+
+
+Answer:
+A combat-focused Warrior benefits from abilities that enhance melee combat, defense, and tactical versatility. Key combinations include:  
+
+- **Iron Fist** (for powerful melee strikes) paired with **Two-handed Force** (to maximize damage output in close combat).  
+- **Shield Fighter** (to improve defense and parrying) combined with **Man-at-arms** (for tactical positioning and battlefield control).  
+- **Twin Attack** (to deliver rapid strikes) alongside **Polearm Mastery** (for effective use of long weapons).  
+- **Berserker** (to increase combat endurance) or **Recovery** (for sustained engagement) to complement physical resilience.  
+
+These abilities synergize to create a Warrior who excels in direct combat, balances offense and defense, and adapts to dynamic battlefield scenarios.
+
+Time: 12.2s
+------------------------------------------------------------
+
+Query: What happens when a character reaches permanent Corruption?
+
+Thinking...
+
+
+Answer:
+When a character's permanent Corruption reaches their Corruption Threshold (half of their Resolute value), they become Blight-marked and receive a permanent Stigma. This Stigma remains until the permanent Corruption is reduced below the threshold. If the character's total Corruption (permanent plus temporary) reaches or exceeds their Resolute value, they transform into an abomination and cannot be saved through any means.
+
+Time: 30.4s
+------------------------------------------------------------
+
+Query: What are the main events in the adventure The Promised Land?
+
+Thinking...
+
+
+Answer:
+The provided context does not mention an adventure titled *The Promised Land*. The scenes and events described in the sources focus on a caravan's encounter with elves (Godrai and Saran-Ri), a conflict involving pathfinders Belun and Ludo, and decisions about extradition or battle. These elements are part of a broader narrative framework but are not explicitly tied to an adventure with that specific title. For details about *The Promised Land*, additional sources or context would be required.
+
+Time: 8.0s
+------------------------------------------------------------
+
+Query: Who is Keler and what role does he play in the adventure?
+
+Thinking...
+
+
+Answer:
+Keler is a second-rate thief who stole the Sun Stone from Bartolom, a character central to the adventure. He is part of a gang of robbers and seeks to return to them, believing they will recognize his value after he hands over the Sun Stone. Keler is cowardly, using ranged attacks (like his crossbow) when threatened but surrendering if cornered. He sets traps to hinder pursuers and warns them of the undead Mal-Rogan, a figure he fears. His actions drive key scenes, including a confrontation at a windmill ruin, where players must retrieve the Sun Stone from him. If captured, he faces punishment from Argasto, though he remains a minor antagonist rather than a central villain.
+
+Time: 6.9s
+------------------------------------------------------------
+
+Query: What is the Sun Stone and why is it important to the adventure?
+
+Thinking...
+
+
+Answer:
+The Sun Stone is an ancient artifact bound to a wild fire spirit, capable of producing heat and fire. It can be used to ignite objects, amplify fire-based magic, or even summon a fiery spirit to aid its wielder. Its importance lies in its practical value: the caravan relies on it to survive the harsh winter, as its warmth could be critical in extreme cold. Additionally, it is a key item that must be delivered to Grand Master Seldonio, tying it to broader narrative goals. The theft of the Sun Stone by a thief forces the characters into a quest to recover it, making it central to both survival and the unfolding adventure.
+
+Time: 7.9s
+------------------------------------------------------------
+
+Query: What tactics should the GM use for Mal-Rogan in combat?
+
+Thinking...
+
+
+Answer:
+Mal-Rogan should let his followers engage the enemies first while he uses his curse ability to target the toughest opponent, weakening them before moving in for the kill with his spiked club. He may also employ psychological tactics, such as issuing ominous threats to instill fear in the players. If the mummified hand's abilities are in play, he could use *Word of Doom* to hinder enemies' combat effectiveness or *Mal-Rogan's revenge* as a last-resort option to ensure his return if the amulet remains in play.
+
+Time: 9.1s
+------------------------------------------------------------
+
+Query: How should the GM handle the negotiation scene with the elves?
+
+Thinking...
+
+
+Answer:
+The GM should facilitate a dynamic discussion where the player characters influence the caravan's decision. Key elements include presenting conflicting perspectives: Lestra's insistence on extraditing Belun and Ludo for study, the caravan's fear and divided opinions, and the barbarians' resistance. The GM should roleplay these interactions, allowing players to argue, persuade, or negotiate. If the players advocate for fighting, the scene transitions to the final battle. If they support extradition, Lestra attempts further persuasion. The outcome hinges on the players' choices and roleplay, emphasizing narrative impact over mechanical tests.
+
+Time: 10.6s
+------------------------------------------------------------
+
+Query: What rewards do the player characters receive in The Promised Land?
+
+Thinking...
+
+
+Answer:
+The provided context does not mention "The Promised Land" or specific rewards tied to that location. The information available focuses on general player rewards in the Symbaroum game system, such as experience points, social rewards (e.g., favors, dark secrets, titles), equipment, and narrative-driven outcomes from scenes like negotiations or battles. If "The Promised Land" is part of a different game or expansion, the context here does not cover it.
+
+Time: 13.0s
+------------------------------------------------------------
+
+Query: What abilities does Argasto the caravan owner have and how should he fight?
+
+Thinking...
+
+
+Answer:
+Argasto possesses the abilities Recovery (novice), Shield Fighter (adept), and Steadfast (novice), which suggest he is resilient in combat, skilled with a shield, and capable of maintaining composure under pressure. He wields a Sword 4 and wears Scalemail 3 (Impeding) armor, providing him with a defense bonus of +1 (shield) and a Toughness of 13. His fighting approach emphasizes protection and direct engagement, as indicated by his role in defending the pathfinders "to the best of his ability" when they are part of his caravan. In combat scenarios, he is likely to use his shield to safeguard allies while leveraging his sword for offensive strikes, reflecting his tactical focus on both defense and resilience. During the final battle against the elves, he fights alongside the player characters, prioritizing the protection of Belun and Ludo while engaging enemies directly.
+
+Time: 11.4s
+------------------------------------------------------------
+
+Query: How does Saran-Ri's Shapeshift ability work in the final battle?
+
+Thinking...
+
+
+Answer:
+Saran-Ri's Shapeshift ability is noted as "adept" in his character description, indicating a high level of proficiency. While the specific mechanics of the ability are not detailed in the provided context, it is implied to be a key aspect of his combat effectiveness, as he is described as a "young summer elf skilled in battle." In the final battle, his shapeshifting is likely used in conjunction with his tactical approach of targeting the strongest melee opponents first, though the exact form or function of the ability during this encounter is not explicitly described.
+
+Time: 7.6s
+------------------------------------------------------------
+
+Query: Based on the Symbaroum rules, suggest a suitable challenge for a group of 3 novice adventurers in Davokar.
+
+Thinking...
+
+
+Answer:
+A suitable challenge for a group of three novice adventurers in Davokar could involve navigating a tense encounter with a **Summer Elf archer** guarding a sacred grove. The elves enforce ancient treaties forbidding intrusion into Davokar’s depths, and the adventurers must decide whether to retreat or confront the guardian.  
+
+If the party chooses to press forward, the elf—armed with a bow and bound by duty—issues a warning. If ignored, a combat scenario unfolds, with the elf targeting weak points (e.g., legs or arms) to incapacitate rather than kill. The adventurers could also attempt to reason with the elf, leveraging knowledge of Symbaroum’s history or offering a token of goodwill (e.g., a relic or a promise to respect elven boundaries). Success in diplomacy might grant safe passage, while failure forces a fight to first blood, mirroring the caravan’s trial in *Scene 1*.  
+
+This challenge integrates Davokar’s lore, tests the party’s combat and social skills, and aligns with the Iron Pact’s themes of caution and coexistence.
+
+Time: 15.8s
+------------------------------------------------------------
