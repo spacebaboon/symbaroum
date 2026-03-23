@@ -2,13 +2,13 @@ import json
 import os
 import time
 from pathlib import Path
-
+from concurrent.futures import ThreadPoolExecutor
 from dotenv import load_dotenv
+
 from docling.chunking import HybridChunker
 from docling.datamodel.document import DoclingDocument
 from docling.document_converter import DocumentConverter
 from docling_core.transforms.chunker.tokenizer.huggingface import HuggingFaceTokenizer
-from FlagEmbedding import FlagReranker
 from llama_index.core import VectorStoreIndex, Settings, PromptTemplate
 from llama_index.core import StorageContext, load_index_from_storage
 from llama_index.core.query_engine import RetrieverQueryEngine
@@ -19,6 +19,8 @@ from llama_index.llms.ollama import Ollama
 from llama_index.postprocessor.flag_embedding_reranker import FlagEmbeddingReranker
 from llama_index.retrievers.bm25 import BM25Retriever
 from transformers import AutoTokenizer
+import ollama as ollama_client
+
 
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
@@ -31,48 +33,60 @@ DOCLING_JSON = os.environ.get("SYMBAROUM_DOCLING_JSON", "./data/symbaroum_doclin
 INDEX_DIR = os.environ.get("SYMBAROUM_INDEX_DIR", "./index/vector")
 BM25_PATH = os.environ.get("SYMBAROUM_BM25_DIR", "./index/bm25")
 LLM_MODEL = os.environ.get("SYMBAROUM_LLM_MODEL", "qwen3:14b")
+UTILITY_MODEL = os.environ.get("SYMBAROUM_UTILITY_MODEL", "qwen3.5:2b")
 EMBED_MODEL = os.environ.get("SYMBAROUM_EMBED_MODEL", "nomic-embed-text")
 DEBUG = os.environ.get("SYMBAROUM_DEBUG", "").lower() in ("1", "true", "yes")
 
 # Set up models
 Settings.llm = Ollama(
     model=LLM_MODEL,
-    request_timeout=240.0,
+    request_timeout=600.0,
     temperature=0.1,
     context_window=8192,
+    keepalive="24h",
 )
 Settings.embed_model = OllamaEmbedding(model_name=EMBED_MODEL)
 
+# Lightweight model for fast utility calls (keyword extraction, query rewriting)
+# Keeps expensive main LLM free for answer generation
+utility_client = ollama_client.Client(host="http://127.0.0.1:11435")
 
 def extract_keywords(query: str) -> str:
-    """Extract key search terms from natural language query for BM25."""
-    response = Settings.llm.complete(
-        "You are helping search a Symbaroum RPG rulebook and adventure. "
-        "Extract the most specific searchable terms from this query. "
-        "Prefer specific proper nouns and character names over generic terms. "
-        "For example:\n"
-        "  'elves in The Promised Land' → 'Godrai Saran-Ri'\n"
-        "  'the thief who stole the Sun Stone' → 'Keler Sun Stone'\n"
-        "  'undead villain in the adventure' → 'Mal-Rogan'\n"
-        "Return only 2-4 specific terms, nothing else, no punctuation:\n"
-        f"Query: {query}\n"
-        "Specific terms:"
+    response = utility_client.chat(
+        model=UTILITY_MODEL,
+        messages=[{"role": "user", "content": 
+            "You are helping search a Symbaroum RPG rulebook and adventure. "
+            "Extract the most specific searchable terms from this query. "
+            "Prefer specific proper nouns and character names over generic terms. "
+            "For example:\n"
+            "  'elves in The Promised Land' → 'Godrai Saran-Ri'\n"
+            "  'the thief who stole the Sun Stone' → 'Keler Sun Stone'\n"
+            "  'undead villain in the adventure' → 'Mal-Rogan'\n"
+            "Return only 2-4 specific terms, nothing else, no punctuation:\n"
+            f"Query: {query}\n"
+            "Specific terms:"
+        }],
+        think=False,
     )
-    return str(response).strip()
-
+    return response.message.content.strip()
 
 def rewrite_query(query: str) -> str:
-    """Rewrite query to be more specific for better retrieval."""
-    response = Settings.llm.complete(
-        "Rewrite this query to improve search retrieval against a Symbaroum RPG rulebook. "
-        "Only use terms and names that are explicitly mentioned in the original query. "
-        "Do not add names, factions, or terms not present in the original. "
-        "Make the query more specific by expanding abbreviations and clarifying intent. "
-        "Return only the rewritten query:\n"
-        f"Original: {query}\n"
-        "Rewritten:"
+    response = utility_client.chat(
+        model=UTILITY_MODEL,
+        messages=[{"role": "user", "content":
+            "Rewrite this query to improve search retrieval against a Symbaroum RPG rulebook. "
+            "Only use terms and names that are explicitly mentioned in the original query. "
+            "Do not add names, factions, or terms not present in the original. "
+            "Make the query more specific by expanding abbreviations and clarifying intent. "
+            "Return only the rewritten query:\n"
+            f"Original: {query}\n"
+            "Rewritten:"
+        }],
+        think=False,
     )
-    return str(response).strip()
+    # Clean up any leading/trailing slashes the model sometimes adds
+    result = response.message.content.strip()
+    return result.strip('/')
 
 
 # Build or load index
@@ -172,14 +186,15 @@ while True:
     timings = {}
 
     t = time.time()
-    keywords = extract_keywords(query)
-    timings['keywords'] = time.time() - t
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        kw_future = executor.submit(extract_keywords, query)
+        rw_future = executor.submit(rewrite_query, query)
+        keywords = kw_future.result()
+        rewritten = rw_future.result()
+    timings['keywords+rewrite'] = time.time() - t
+
     if not keywords.strip():
         keywords = query
-
-    t = time.time()
-    rewritten = rewrite_query(query)
-    timings['rewrite'] = time.time() - t
     if not rewritten.strip():
         rewritten = query
 
@@ -228,8 +243,10 @@ while True:
 
     total = sum(timings.values())
     print(f"\nAnswer:\n{response}\n")
-    print(f"Timings:")
-    for stage, t in timings.items():
-        print(f"  {stage:20s}: {t:.1f}s ({t/total*100:.0f}%)")
-    print(f"  {'TOTAL':20s}: {total:.1f}s")
-    print("-" * 60 + "\n")
+
+    if DEBUG:
+        print(f"Timings:")
+        for stage, t in timings.items():
+            print(f"  {stage:20s}: {t:.1f}s ({t/total*100:.0f}%)")
+        print(f"  {'TOTAL':20s}: {total:.1f}s")
+        print("-" * 60 + "\n")
