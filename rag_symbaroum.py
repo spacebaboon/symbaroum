@@ -1,16 +1,24 @@
 import json
 import os
 import time
+from pathlib import Path
+
 from dotenv import load_dotenv
-from llama_index.core import VectorStoreIndex, SimpleDirectoryReader, Settings, PromptTemplate, StorageContext, load_index_from_storage
+from docling.chunking import HybridChunker
+from docling.datamodel.document import DoclingDocument
+from docling.document_converter import DocumentConverter
+from docling_core.transforms.chunker.tokenizer.huggingface import HuggingFaceTokenizer
+from FlagEmbedding import FlagReranker
+from llama_index.core import VectorStoreIndex, Settings, PromptTemplate
+from llama_index.core import StorageContext, load_index_from_storage
 from llama_index.core.query_engine import RetrieverQueryEngine
-from llama_index.core.schema import TextNode, QueryBundle, NodeWithScore
 from llama_index.core.retrievers import BaseRetriever
-from llama_index.llms.ollama import Ollama
+from llama_index.core.schema import TextNode, NodeWithScore, QueryBundle
 from llama_index.embeddings.ollama import OllamaEmbedding
-from llama_index.core.node_parser import MarkdownNodeParser, SentenceSplitter
-from llama_index.retrievers.bm25 import BM25Retriever
+from llama_index.llms.ollama import Ollama
 from llama_index.postprocessor.flag_embedding_reranker import FlagEmbeddingReranker
+from llama_index.retrievers.bm25 import BM25Retriever
+from transformers import AutoTokenizer
 
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
@@ -18,17 +26,12 @@ os.environ["TOKENIZERS_PARALLELISM"] = "false"
 load_dotenv()
 
 # Config
-MARKDOWN_DIR = os.environ.get(
-    "SYMBAROUM_MARKDOWN_DIR",
-    "./marker_output/symbaroum_core_rulebook"
-)
-INDEX_DIR = os.environ.get(
-    "SYMBAROUM_INDEX_DIR",
-    "./index"
-)
+PDF_PATH = os.environ.get("SYMBAROUM_PDF_PATH", "./data/symbaroum_core_rulebook.pdf")
+DOCLING_JSON = os.environ.get("SYMBAROUM_DOCLING_JSON", "./data/symbaroum_docling.json")
+INDEX_DIR = os.environ.get("SYMBAROUM_INDEX_DIR", "./index/vector")
+BM25_PATH = os.environ.get("SYMBAROUM_BM25_DIR", "./index/bm25")
 LLM_MODEL = os.environ.get("SYMBAROUM_LLM_MODEL", "qwen3:14b")
 EMBED_MODEL = os.environ.get("SYMBAROUM_EMBED_MODEL", "nomic-embed-text")
-BM25_PATH = os.environ.get("SYMBAROUM_BM25_DIR", "./bm25_index")
 DEBUG = os.environ.get("SYMBAROUM_DEBUG", "").lower() in ("1", "true", "yes")
 
 # Set up models
@@ -40,18 +43,26 @@ Settings.llm = Ollama(
 )
 Settings.embed_model = OllamaEmbedding(model_name=EMBED_MODEL)
 
+
 def extract_keywords(query: str) -> str:
     """Extract key search terms from natural language query for BM25."""
     response = Settings.llm.complete(
-        "Extract only the specific proper nouns, names, and unique terms from this query. "
-        "Ignore generic words like 'ability', 'rule', 'condition', 'what', 'how', 'the'. "
-        "Return only 1-3 specific terms, nothing else, no punctuation:\n"
+        "You are helping search a Symbaroum RPG rulebook and adventure. "
+        "Extract the most specific searchable terms from this query. "
+        "Prefer specific proper nouns and character names over generic terms. "
+        "For example:\n"
+        "  'elves in The Promised Land' → 'Godrai Saran-Ri'\n"
+        "  'the thief who stole the Sun Stone' → 'Keler Sun Stone'\n"
+        "  'undead villain in the adventure' → 'Mal-Rogan'\n"
+        "Return only 2-4 specific terms, nothing else, no punctuation:\n"
         f"Query: {query}\n"
         "Specific terms:"
     )
     return str(response).strip()
 
+
 def rewrite_query(query: str) -> str:
+    """Rewrite query to be more specific for better retrieval."""
     response = Settings.llm.complete(
         "Rewrite this query to improve search retrieval against a Symbaroum RPG rulebook. "
         "Only use terms and names that are explicitly mentioned in the original query. "
@@ -63,59 +74,67 @@ def rewrite_query(query: str) -> str:
     )
     return str(response).strip()
 
+
+# Build or load index
 if os.path.exists(INDEX_DIR) and os.path.exists(BM25_PATH):
     print("Loading existing index...")
     storage_context = StorageContext.from_defaults(persist_dir=INDEX_DIR)
     index = load_index_from_storage(storage_context)
 
-    # Reconstruct BM25 retriever from saved nodes
     with open(f"{BM25_PATH}/nodes.json", "r") as f:
         node_data = json.load(f)
     nodes = [TextNode(text=n["text"], id_=n["id"], metadata=n["metadata"]) for n in node_data]
-    bm25_retriever = BM25Retriever.from_defaults(
-        nodes=nodes,
-        similarity_top_k=15,
-    )
+    bm25_retriever = BM25Retriever.from_defaults(nodes=nodes, similarity_top_k=15)
+
 else:
-    print("Building index from markdown...")
-    documents = SimpleDirectoryReader(
-        MARKDOWN_DIR,
-        required_exts=[".md"]
-    ).load_data()
+    print("Building index...")
 
-    md_parser = MarkdownNodeParser()
-    md_nodes = md_parser.get_nodes_from_documents(documents)
+    # Convert or load cached Docling document
+    if Path(DOCLING_JSON).exists():
+        print("Loading cached Docling document...")
+        doc = DoclingDocument.load_from_json(DOCLING_JSON)
+    else:
+        print("Converting PDF with Docling (one-time)...")
+        converter = DocumentConverter()
+        result = converter.convert(PDF_PATH)
+        doc = result.document
+        doc.save_as_json(DOCLING_JSON)
+        print(f"Saved to {DOCLING_JSON}")
 
-    splitter = SentenceSplitter(chunk_size=512, chunk_overlap=50)
-    nodes = []
-    for node in md_nodes:
-        if len(node.text) > 1500:
-            sub_nodes = splitter.get_nodes_from_documents([node])
-            nodes.extend(sub_nodes)
-        else:
-            nodes.append(node)
+    # Chunk with Nomic-aligned tokenizer
+    print("Chunking with HybridChunker...")
+    tokenizer = HuggingFaceTokenizer(
+        tokenizer=AutoTokenizer.from_pretrained("nomic-ai/nomic-embed-text-v1"),
+        max_tokens=512,
+    )
+    chunker = HybridChunker(tokenizer=tokenizer)
+    chunks = list(chunker.chunk(dl_doc=doc))
 
-    # Safety net filter
-    nodes = [n for n in nodes if len(n.text) < 3000] 
+    # Convert to LlamaIndex nodes using contextualized text
+    nodes = [
+        TextNode(
+            text=chunker.contextualize(chunk),
+            metadata={"source": "symbaroum_core_rulebook"}
+        )
+        for chunk in chunks
+    ]
     print(f"Created {len(nodes)} chunks")
 
     index = VectorStoreIndex(nodes, show_progress=True)
+    os.makedirs(INDEX_DIR, exist_ok=True)
     index.storage_context.persist(persist_dir=INDEX_DIR)
 
-    # Build and persist BM25 index by saving nodes
+    # Build and persist BM25 index
     os.makedirs(BM25_PATH, exist_ok=True)
-    bm25_retriever = BM25Retriever.from_defaults(
-        nodes=nodes,
-        similarity_top_k=10,
-    )
-    # Save node texts and ids for BM25 reconstruction
+    bm25_retriever = BM25Retriever.from_defaults(nodes=nodes, similarity_top_k=15)
     node_data = [{"text": n.text, "id": n.node_id, "metadata": n.metadata} for n in nodes]
     with open(f"{BM25_PATH}/nodes.json", "w") as f:
         json.dump(node_data, f)
 
     print(f"Index saved to {INDEX_DIR}")
 
-# Custom prompt for detailed answers
+
+# Custom prompt
 qa_prompt = PromptTemplate(
     "You are an expert on the Symbaroum tabletop RPG rules and the tutorial adventure 'The Promised Land'. "
     "Using the context below, provide a thorough and complete answer. "
@@ -128,8 +147,19 @@ qa_prompt = PromptTemplate(
     "Detailed Answer:"
 )
 
-# Vector retriever
+# Retrievers
 vector_retriever = index.as_retriever(similarity_top_k=15)
+reranker = FlagEmbeddingReranker(model="BAAI/bge-reranker-base", top_n=8)
+
+
+class StaticRetriever(BaseRetriever):
+    def __init__(self, nodes):
+        self._nodes = nodes
+        super().__init__()
+
+    def _retrieve(self, query_bundle):
+        return self._nodes
+
 
 print("\nSymbaroum RAG ready. Type 'quit' to exit.\n")
 while True:
@@ -139,58 +169,43 @@ while True:
     if not query:
         continue
 
-    # Extract keywords for BM25
     keywords = extract_keywords(query)
+    rewritten = rewrite_query(query)
+
     if DEBUG:
         print(f"BM25 keywords: {keywords}")
-
-    rewritten = rewrite_query(query)
-    if DEBUG:
         print(f"Rewritten query: {rewritten}")
 
     # Retrieve from both
     vector_nodes = vector_retriever.retrieve(rewritten)
     bm25_nodes = bm25_retriever.retrieve(keywords)
 
-    # Simple reciprocal rank fusion
+    # Reciprocal rank fusion with BM25 boost
     seen_ids = {}
     for rank, node in enumerate(vector_nodes):
-        seen_ids[node.node_id] = seen_ids.get(node.node_id, 0) + 1/(rank + 1)
+        seen_ids[node.node_id] = seen_ids.get(node.node_id, 0) + 1 / (rank + 1)
     for rank, node in enumerate(bm25_nodes):
-        seen_ids[node.node_id] = seen_ids.get(node.node_id, 0) + 1/(rank + 1)
+        seen_ids[node.node_id] = seen_ids.get(node.node_id, 0) + 2 / (rank + 1)
 
-    # Combine all nodes, deduplicate, sort by fused score
+    # Deduplicate and sort
     all_nodes = {}
     for n in vector_nodes + bm25_nodes:
-        # n is NodeWithScore, we need the underlying node
-        all_nodes[n.node_id] = n.node  # extract the actual node
+        all_nodes[n.node_id] = n.node
 
-    fused = sorted(all_nodes.values(), key=lambda n: seen_ids[n.node_id], reverse=True)[:10]
-    
-    if DEBUG:
-        print("\nRetrieved chunks:")
-        for i, node in enumerate(fused):
-            print(f"\n[{i+1}] Score: {seen_ids[node.node_id]:.3f}")
-            print(node.text[:200])
+    fused = sorted(all_nodes.values(), key=lambda n: seen_ids[n.node_id], reverse=True)[:15]
 
-    # Rerank fused results
-    reranker = FlagEmbeddingReranker(
-        model="BAAI/bge-reranker-base",
-        top_n=8,
-    )
+    # Rerank
     fused_with_scores = [NodeWithScore(node=n, score=seen_ids[n.node_id]) for n in fused]
     reranked = reranker.postprocess_nodes(fused_with_scores, query_bundle=QueryBundle(query))
-    fused = [n.node for n in reranked]
 
-    # Query using fused nodes directly
-    class StaticRetriever(BaseRetriever):
-        def __init__(self, nodes):
-            self._nodes = nodes
-            super().__init__()
-        def _retrieve(self, query_bundle):
-            return self._nodes
+    if DEBUG:
+        print("\nReranked chunks:")
+        for i, node in enumerate(reranked):
+            print(f"\n[{i + 1}] Score: {node.score:.3f}")
+            print(node.text[:200])
 
-    static_retriever = StaticRetriever([NodeWithScore(node=n, score=seen_ids[n.node_id]) for n in fused])
+    # Query
+    static_retriever = StaticRetriever(reranked)
     qe = RetrieverQueryEngine.from_args(static_retriever, response_mode="tree_summarize")
     qe.update_prompts({"response_synthesizer:text_qa_template": qa_prompt})
 
