@@ -169,34 +169,49 @@ while True:
     if not query:
         continue
 
+    timings = {}
+
+    t = time.time()
     keywords = extract_keywords(query)
+    timings['keywords'] = time.time() - t
+    if not keywords.strip():
+        keywords = query
+
+    t = time.time()
     rewritten = rewrite_query(query)
+    timings['rewrite'] = time.time() - t
+    if not rewritten.strip():
+        rewritten = query
 
     if DEBUG:
         print(f"BM25 keywords: {keywords}")
         print(f"Rewritten query: {rewritten}")
 
-    # Retrieve from both
+    t = time.time()
     vector_nodes = vector_retriever.retrieve(rewritten)
-    bm25_nodes = bm25_retriever.retrieve(keywords)
+    timings['vector_retrieval'] = time.time() - t
 
-    # Reciprocal rank fusion with BM25 boost
+    t = time.time()
+    bm25_nodes = bm25_retriever.retrieve(keywords)
+    timings['bm25_retrieval'] = time.time() - t
+
+    # Fusion
+    t = time.time()
     seen_ids = {}
     for rank, node in enumerate(vector_nodes):
         seen_ids[node.node_id] = seen_ids.get(node.node_id, 0) + 1 / (rank + 1)
     for rank, node in enumerate(bm25_nodes):
         seen_ids[node.node_id] = seen_ids.get(node.node_id, 0) + 2 / (rank + 1)
-
-    # Deduplicate and sort
     all_nodes = {}
     for n in vector_nodes + bm25_nodes:
         all_nodes[n.node_id] = n.node
-
     fused = sorted(all_nodes.values(), key=lambda n: seen_ids[n.node_id], reverse=True)[:15]
+    timings['fusion'] = time.time() - t
 
-    # Rerank
+    t = time.time()
     fused_with_scores = [NodeWithScore(node=n, score=seen_ids[n.node_id]) for n in fused]
     reranked = reranker.postprocess_nodes(fused_with_scores, query_bundle=QueryBundle(query))
+    timings['reranking'] = time.time() - t
 
     if DEBUG:
         print("\nReranked chunks:")
@@ -204,15 +219,17 @@ while True:
             print(f"\n[{i + 1}] Score: {node.score:.3f}")
             print(node.text[:200])
 
-    # Query
+    t = time.time()
     static_retriever = StaticRetriever(reranked)
     qe = RetrieverQueryEngine.from_args(static_retriever, response_mode="tree_summarize")
     qe.update_prompts({"response_synthesizer:text_qa_template": qa_prompt})
-
-    print("\nThinking...\n")
-    start = time.time()
     response = qe.query(query)
-    elapsed = time.time() - start
+    timings['llm_answer'] = time.time() - t
+
+    total = sum(timings.values())
     print(f"\nAnswer:\n{response}\n")
-    print(f"Time: {elapsed:.1f}s")
+    print(f"Timings:")
+    for stage, t in timings.items():
+        print(f"  {stage:20s}: {t:.1f}s ({t/total*100:.0f}%)")
+    print(f"  {'TOTAL':20s}: {total:.1f}s")
     print("-" * 60 + "\n")
