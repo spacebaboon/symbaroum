@@ -35,7 +35,9 @@ BM25_PATH = os.environ.get("SYMBAROUM_BM25_DIR", "./index/bm25")
 LLM_MODEL = os.environ.get("SYMBAROUM_LLM_MODEL", "qwen3:14b")
 UTILITY_MODEL = os.environ.get("SYMBAROUM_UTILITY_MODEL", "qwen3.5:2b")
 EMBED_MODEL = os.environ.get("SYMBAROUM_EMBED_MODEL", "nomic-embed-text")
+EMBED_HOST = os.environ.get("SYMBAROUM_EMBED_HOST", "http://127.0.0.1:11436")
 DEBUG = os.environ.get("SYMBAROUM_DEBUG", "").lower() in ("1", "true", "yes")
+
 
 # Set up models
 Settings.llm = Ollama(
@@ -45,7 +47,10 @@ Settings.llm = Ollama(
     context_window=8192,
     keepalive="24h",
 )
-Settings.embed_model = OllamaEmbedding(model_name=EMBED_MODEL)
+Settings.embed_model = OllamaEmbedding(
+    model_name=EMBED_MODEL,
+    base_url=EMBED_HOST,
+)
 
 # Lightweight model for fast utility calls (keyword extraction, query rewriting)
 # Keeps expensive main LLM free for answer generation
