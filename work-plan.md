@@ -104,14 +104,14 @@ LazyGraphRAG is conceptually superior (NLP-only indexing, zero LLM calls at inde
 
 #### Subtasks
 
-- [ ] Install LightRAG (`uv add lightrag-hku`)
-- [ ] Write Docling→LightRAG text converter (reuse contextualized HybridChunker output)
-- [ ] Configure LightRAG with Ollama LLM and Nomic embeddings
+- [x] Install LightRAG (`uv add lightrag-hku`)
+- [x] Write Docling→LightRAG text converter (reuse contextualized HybridChunker output)
+- [x] Configure LightRAG with Ollama LLM and Nomic embeddings
 - [ ] Benchmark entity extraction models (qwen3:8b vs qwen3:14b vs qwen3:1.7b)
 - [ ] Run one-time indexing, save graph to `index/lightrag/`
 - [ ] Build query router: rules queries → hybrid RAG, adventure/cross-ref queries → LightRAG
 - [ ] Test cross-reference queries: "monsters in The Promised Land with abilities"
-- [ ] Add LightRAG index path to .env and start/stop scripts
+- [x] Add LightRAG index path to .env and start/stop scripts
 - [ ] Git tag: v0.6-lightrag
 
 #### Research notes
