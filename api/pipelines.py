@@ -48,7 +48,9 @@ INDEX_DIR     = os.environ.get("SYMBAROUM_INDEX_DIR",    "./index/vector")
 BM25_PATH     = os.environ.get("SYMBAROUM_BM25_DIR",     "./index/bm25")
 LIGHTRAG_DIR  = os.environ.get("SYMBAROUM_LIGHTRAG_DIR", "./index/lightrag")
 LLM_MODEL     = os.environ.get("SYMBAROUM_LLM_MODEL",    "qwen3:14b")
+LLM_HOST      = os.environ.get("SYMBAROUM_LLM_HOST",     "http://127.0.0.1:11434")
 UTILITY_MODEL = os.environ.get("SYMBAROUM_UTILITY_MODEL","qwen3:1.7b")
+UTILITY_HOST  = os.environ.get("SYMBAROUM_UTILITY_HOST", "http://127.0.0.1:11435")
 EMBED_MODEL   = os.environ.get("SYMBAROUM_EMBED_MODEL",  "nomic-embed-text")
 EMBED_HOST    = os.environ.get("SYMBAROUM_EMBED_HOST",   "http://127.0.0.1:11436")
 DEBUG         = os.environ.get("SYMBAROUM_DEBUG", "").lower() in ("1", "true", "yes")
@@ -61,6 +63,14 @@ if not DEBUG:
     logging.getLogger("lightrag").setLevel(logging.WARNING)
     logging.getLogger("nano-vectordb").setLevel(logging.WARNING)
     logging.getLogger("httpx").setLevel(logging.WARNING)
+
+# ---------------------------------------------------------------------------
+# Module-level Ollama clients
+# ---------------------------------------------------------------------------
+
+_llm_client     = ollama_client.AsyncClient(host=LLM_HOST)
+_utility_client = ollama_client.AsyncClient(host=UTILITY_HOST)
+_embed_client   = ollama_client.AsyncClient(host=EMBED_HOST)
 
 # ---------------------------------------------------------------------------
 # Module-level state — populated by initialise()
@@ -93,8 +103,7 @@ QA_PROMPT = PromptTemplate(
 # ---------------------------------------------------------------------------
 
 async def _nomic_embed(texts: list[str]) -> np.ndarray:
-    client = ollama_client.AsyncClient(host="http://127.0.0.1:11436")
-    data = await client.embed(
+    data = await _embed_client.embed(
         model=EMBED_MODEL,
         input=texts,
         keep_alive="1h",
@@ -103,7 +112,7 @@ async def _nomic_embed(texts: list[str]) -> np.ndarray:
 
 
 async def _ollama_chat_nothink(
-    prompt, system_prompt=None, history_messages=[], **kwargs
+    prompt, system_prompt=None, history_messages=None, **kwargs
 ) -> str:
     kwargs.pop("hashing_kv", None)
     kwargs.pop("max_tokens", None)
@@ -111,11 +120,11 @@ async def _ollama_chat_nothink(
     messages = []
     if system_prompt:
         messages.append({"role": "system", "content": system_prompt})
-    messages.extend(history_messages)
+    if history_messages:
+        messages.extend(history_messages)
     messages.append({"role": "user", "content": prompt})
 
-    client = ollama_client.AsyncClient(host="http://127.0.0.1:11434")
-    response = await client.chat(
+    response = await _llm_client.chat(
         model=LLM_MODEL,
         messages=messages,
         think=False,
@@ -129,8 +138,7 @@ async def _ollama_chat_nothink(
 # ---------------------------------------------------------------------------
 
 async def _extract_keywords(query: str) -> str:
-    client = ollama_client.AsyncClient(host="http://127.0.0.1:11435")
-    response = await client.chat(
+    response = await _utility_client.chat(
         model=UTILITY_MODEL,
         messages=[{"role": "user", "content":
             "You are helping search a Symbaroum RPG rulebook and adventure. "
@@ -150,8 +158,7 @@ async def _extract_keywords(query: str) -> str:
 
 
 async def _rewrite_query(query: str) -> str:
-    client = ollama_client.AsyncClient(host="http://127.0.0.1:11435")
-    response = await client.chat(
+    response = await _utility_client.chat(
         model=UTILITY_MODEL,
         messages=[{"role": "user", "content":
             "Rewrite this query to improve search retrieval against a Symbaroum RPG rulebook. "
@@ -169,8 +176,7 @@ async def _rewrite_query(query: str) -> str:
 
 async def route(query: str) -> str:
     """Route query to 'hybrid' or 'lightrag' pipeline."""
-    client = ollama_client.AsyncClient(host="http://127.0.0.1:11435")
-    response = await client.chat(
+    response = await _utility_client.chat(
         model=UTILITY_MODEL,
         messages=[{"role": "user", "content":
             "You are routing queries for a Symbaroum RPG assistant. "

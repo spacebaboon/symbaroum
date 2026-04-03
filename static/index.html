@@ -170,6 +170,11 @@
         padding: 0.75rem 1.25rem;
         border-bottom: 1px solid var(--border);
         background: var(--surface2);
+        display: none;
+      }
+
+      .card-question.visible {
+        display: block;
       }
 
       #answer-card.visible {
@@ -258,6 +263,18 @@
       }
 
       /* ---- Markdown-lite rendering ---- */
+      .md-h1 {
+        color: var(--accent);
+        font-size: 1.1rem;
+        font-weight: 700;
+        margin-top: 1em;
+      }
+      .md-h2 {
+        color: var(--accent);
+        font-size: 1rem;
+        font-weight: 700;
+        margin-top: 0.9em;
+      }
       .md-h3 {
         color: var(--accent);
         font-size: 0.95rem;
@@ -271,6 +288,18 @@
       .md-li {
         padding-left: 1.2em;
         text-indent: -1.2em;
+      }
+      .md-oli {
+        padding-left: 1.6em;
+        text-indent: -1.6em;
+      }
+      .md-code {
+        background: var(--surface2);
+        border: 1px solid var(--border);
+        border-radius: 3px;
+        font-family: var(--font-mono);
+        font-size: 0.85em;
+        padding: 0.1em 0.35em;
       }
     </style>
   </head>
@@ -383,8 +412,12 @@
         // We receive plain text chunks and build up the full string,
         // then do a light render pass at the end.
         return text
+          .replace(/^# (.+)$/gm, '<div class="md-h1">$1</div>')
+          .replace(/^## (.+)$/gm, '<div class="md-h2">$1</div>')
           .replace(/^### (.+)$/gm, '<div class="md-h3">$1</div>')
           .replace(/\*\*(.+?)\*\*/g, '<span class="md-bold">$1</span>')
+          .replace(/`([^`]+)`/g, '<span class="md-code">$1</span>')
+          .replace(/^\d+\. (.+)$/gm, '<div class="md-oli">$&</div>')
           .replace(/^- (.+)$/gm, '<div class="md-li">• $1</div>');
       }
 
@@ -397,6 +430,7 @@
         // UI: loading state
         input.value = "";
         questionEl.textContent = query;
+        questionEl.classList.add("visible");
         input.disabled = true;
         submitBtn.disabled = true;
         errorEl.classList.remove("visible");
