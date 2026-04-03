@@ -18,9 +18,10 @@ A local, private RAG (Retrieval-Augmented Generation) system that allows a Game 
 - **BM25**: LlamaIndex BM25Retriever with manual RRF fusion
 - **Knowledge graph**: LightRAG (NetworkX + NanoVectorDB, file-backed)
 - **Reranker**: BAAI/bge-reranker-base (cross-encoder)
-- **Query router**: qwen3:1.7b classifies queries → hybrid or lightrag path
+- **Query router**: qwen3:1.7b classifies queries → hybrid or LightRAG path
 - **LLM (answers)**: qwen3:14b via Ollama (port 11434)
 - **LLM (utility)**: qwen3:1.7b via Ollama (port 11435), think=False
+- **Web server**: FastAPI + Starlette StreamingResponse (SSE)
 - **Framework**: LlamaIndex + LightRAG + direct Ollama Python client
 - **Package manager**: uv
 
@@ -28,15 +29,17 @@ A local, private RAG (Retrieval-Augmented Generation) system that allows a Game 
 
 - Docling over Marker for chunking (context-aware, heading-prefixed embeddings)
 - Manual RRF fusion over QueryFusionRetriever (more control, BM25 2x weighting)
-- Direct Ollama client for utility calls (bypasses LlamaIndex for think=False support)
-- Parallel utility LLM calls (ThreadPoolExecutor, ~0.5s vs ~48s sequential)
+- Direct async Ollama client for all utility calls (avoids event loop deadlocks in FastAPI)
+- `asyncio.gather()` for parallel utility LLM calls (replaces ThreadPoolExecutor)
 - Native Linux filesystem (~/) over /mnt/g/ (5x I/O performance improvement)
 - Three concurrent Ollama instances to keep all models resident in VRAM simultaneously
-- LightRAG over LazyGraphRAG (fully open source, active Ollama support; LazyGraphRAG not cleanly available for local use)
+- LightRAG over LazyGraphRAG (fully open source, active Ollama support)
 - Router temperature=0 for deterministic path selection
 - LightRAG `mix` mode for queries (graph traversal + vector combined)
 - `build_lightrag_index.py` as a separate one-time indexing script (not part of inference)
-- `rag_query.py` as the primary inference entry point (replaces `rag_symbaroum.py` for daily use)
+- Pipeline logic in `api/pipelines.py` shared between FastAPI server and CLI
+- Raw `StreamingResponse` with SSE wire format over `sse-starlette` (version compatibility issues with dict format in 2.x+)
+- Newlines in SSE token data escaped as `\n` to avoid breaking SSE framing
 
 ---
 
@@ -88,6 +91,18 @@ A local, private RAG (Retrieval-Augmented Generation) system that allows a Game 
 - Logging cleanup: LightRAG INFO suppressed in normal mode, DEBUG flag for full output
 - Routing determinism: temperature=0 on router call
 
+### v0.7 — FastAPI Web UI with SSE Streaming ✓
+
+- Refactored pipeline logic into `api/pipelines.py` — shared by both web server and CLI
+- `api/app.py`: FastAPI server with `POST /query` SSE streaming endpoint
+- `api/models.py`: Pydantic request/response models
+- `static/index.html`: single-page frontend — dark theme, markdown rendering, query history chips, question displayed above answer
+- All utility LLM calls converted to fully async (`AsyncClient`) — eliminates event loop deadlocks
+- `asyncio.gather()` replaces `ThreadPoolExecutor` for parallel keyword/rewrite calls
+- SSE via raw `StreamingResponse` (sse-starlette 3.x incompatible with dict yield format)
+- `rag_query.py` retained as thin CLI wrapper importing from `api/pipelines.py`
+- Query input cleared after submission; question shown above answer in UI
+
 ---
 
 ## Current State
@@ -96,25 +111,26 @@ A local, private RAG (Retrieval-Augmented Generation) system that allows a Game 
 
 - Rules queries: accurate, well-cited answers for abilities, conditions, combat rules
 - Adventure queries: finding NPCs, scenes, tactics with correct details
-- Named entity retrieval: few-shot keyword extraction resolves generic terms to named entities
 - Cross-reference queries: LightRAG correctly handles adventure+rules relationships
+- Named entity retrieval: few-shot keyword extraction resolves generic terms to named entities
 - Routing: consistently sends factual queries to hybrid, relational queries to LightRAG
 - Query timing: hybrid ~10–40s, LightRAG ~60s first call / ~1s cached
+- Web UI: streaming responses, pipeline badge, query history chips, markdown rendering
 - All three models stay resident in VRAM — no load/unload overhead
 
 ### Known Limitations
 
 - LightRAG INFO logging cannot be suppressed via Python logging (uses print internally)
-- Keyword extraction occasionally misfires on abstract queries (e.g. extracted "Godrai Saran-Ri" for a rewards query) — BM25 path still recovers via reranker
+- Keyword extraction occasionally misfires on abstract queries (rewards, thematic questions)
 - LightRAG first-call latency ~60s (mitigated by response cache for repeat queries)
 - Single document only (core rulebook + tutorial adventure)
-- `asyncio.get_event_loop()` deprecation warning during LightRAG init (cosmetic, not functional)
+- Hybrid path delivers answer as a single chunk (no token-level streaming — LlamaIndex query engine is synchronous)
 
 ---
 
 ## Immediate Next Steps
 
-### Task 2: Qdrant Vector Database
+### Task 3: Qdrant Vector Database
 
 **Goal**: Replace in-memory JSON store with proper vector DB for multi-document scale  
 **Priority**: Medium (needed before adding a second document)  
@@ -124,19 +140,19 @@ A local, private RAG (Retrieval-Augmented Generation) system that allows a Game 
 
 - Install Qdrant via Docker: `docker run -p 6333:6333 qdrant/qdrant`
 - Add `llama-index-vector-stores-qdrant` dependency
-- Replace `VectorStoreIndex` JSON store with Qdrant backend
+- Replace `VectorStoreIndex` JSON store with Qdrant backend in `api/pipelines.py`
 - Test incremental upsert (add new book without full rebuild)
 - Add Qdrant startup to start.sh
 - Update stop.sh to preserve Qdrant data between sessions
-- Git tag: v0.7-qdrant
+- Git tag: v0.8-qdrant
 
 ---
 
-### Task 3: Multi-Document Support
+### Task 4: Multi-Document Support
 
 **Goal**: Add remaining Symbaroum content (adventure modules, additional sourcebooks)  
 **Priority**: High (unlocks the full GM assistant vision)  
-**Dependencies**: Qdrant (Task 2)
+**Dependencies**: Qdrant (Task 3)
 
 #### Subtasks
 
@@ -148,255 +164,6 @@ A local, private RAG (Retrieval-Augmented Generation) system that allows a Game 
 - Update keyword extraction prompt with new content awareness
 - Rebuild LightRAG index with all documents
 - Test cross-document queries: "adventures that feature corruption themes"
-
----
-
-### Task 4: FastAPI Web UI with Streaming
-
-**Goal**: Serve the GM assistant via a web interface with streaming responses, replacing the CLI REPL  
-**Priority**: Medium  
-**Estimated effort**: 1-2 sessions  
-**Dependencies**: None (can run alongside existing `rag_query.py` CLI)
-
----
-
-#### Overview
-
-Refactor `rag_query.py` from a top-to-bottom script into a proper FastAPI application with:
-
-- A streaming `POST /query` endpoint using server-sent events (SSE)
-- A single-page HTML frontend served by FastAPI
-- Startup/shutdown lifecycle hooks for index loading
-- Full async pipeline (removing `asyncio.run()` workarounds)
-
-The existing pipeline logic, prompts, and routing should be preserved exactly — this is a serving layer change, not a retrieval change.
-
----
-
-#### File Structure
-
-```
-symbaroum/
-  api/
-    __init__.py
-    app.py           # FastAPI app, lifespan, /query endpoint
-    pipelines.py     # refactored hybrid + lightrag pipeline functions (async)
-    models.py        # Pydantic request/response models
-  static/
-    index.html       # single-page frontend
-  rag_query.py       # CLI entry point (kept, imports from api/)
-```
-
----
-
-#### Subtasks
-
-**4.1 — Add dependencies**
-
-```
-uv add fastapi uvicorn[standard] sse-starlette
-```
-
-`sse-starlette` provides the `EventSourceResponse` class for server-sent events.
-
----
-
-**4.2 — Create `api/models.py`**
-
-Pydantic models for request/response:
-
-```python
-from pydantic import BaseModel
-from typing import Literal
-
-class QueryRequest(BaseModel):
-    query: str
-
-class QueryMetadata(BaseModel):
-    pipeline: Literal["hybrid", "lightrag"]
-    timings: dict[str, float]
-    total: float
-```
-
----
-
-**4.3 — Refactor pipelines into `api/pipelines.py`**
-
-Extract all pipeline logic from `rag_query.py` into importable async functions. Key changes from the current script:
-
-- All index loading moved into an `initialise()` async function (called once at startup)
-- `run_hybrid_pipeline()` becomes `async def hybrid_pipeline(query: str) -> AsyncGenerator[str, None]`
-- `run_lightrag_pipeline()` becomes `async def lightrag_pipeline(query: str) -> AsyncGenerator[str, None]`
-- Both yield token chunks as strings for SSE streaming
-- `route_query()` and utility LLM calls use `asyncio.get_event_loop().run_in_executor()` to avoid blocking the event loop (they use the sync Ollama client)
-- All state (indexes, rag instance, retrievers, reranker) held as module-level variables, initialised once
-
-**Hybrid pipeline streaming approach:**
-LlamaIndex's `query_engine.query()` is synchronous. Options:
-
-- Run it in a thread executor and stream the complete response as a single SSE event (simplest)
-- Switch to `astream_chat()` if using a chat engine — yields tokens natively (more complex)
-- Recommended for v0.7: run in executor, emit a "thinking" SSE event while waiting, then emit the full answer. True token streaming can be added later.
-
-**LightRAG streaming approach:**
-LightRAG's `aquery()` supports streaming via `QueryParam(stream=True)` which returns an `AsyncGenerator`. Yield each chunk directly as an SSE event. This gives true token-level streaming for the LightRAG path.
-
----
-
-**4.4 — Create `api/app.py`**
-
-```python
-from contextlib import asynccontextmanager
-from fastapi import FastAPI
-from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse
-from sse_starlette.sse import EventSourceResponse
-from api.models import QueryRequest
-from api import pipelines
-import json, time
-
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    await pipelines.initialise()   # load all indexes on startup
-    yield
-    # optional: graceful shutdown of Ollama clients
-
-app = FastAPI(lifespan=lifespan)
-app.mount("/static", StaticFiles(directory="static"), name="static")
-
-@app.get("/")
-async def root():
-    return FileResponse("static/index.html")
-
-@app.post("/query")
-async def query(request: QueryRequest):
-    async def event_stream():
-        total_start = time.time()
-
-        # Route
-        pipeline = await pipelines.route(request.query)
-        yield {"event": "routing", "data": json.dumps({"pipeline": pipeline})}
-
-        # Stream answer
-        timings = {}
-        t = time.time()
-        if pipeline == "lightrag":
-            async for chunk in pipelines.lightrag_pipeline(request.query):
-                yield {"event": "token", "data": chunk}
-            timings["lightrag_query"] = time.time() - t
-        else:
-            async for chunk in pipelines.hybrid_pipeline(request.query):
-                yield {"event": "token", "data": chunk}
-            timings["hybrid"] = time.time() - t
-
-        # Done event with metadata
-        yield {
-            "event": "done",
-            "data": json.dumps({
-                "pipeline": pipeline,
-                "timings": timings,
-                "total": time.time() - total_start,
-            })
-        }
-
-    return EventSourceResponse(event_stream())
-```
-
----
-
-**4.5 — Create `static/index.html`**
-
-Single self-contained HTML file, no build step, no external JS frameworks. Requirements:
-
-- Text input + submit button
-- Answer display area that appends tokens as they arrive (SSE `token` events)
-- Pipeline badge: shows `hybrid` or `lightrag` once routing event arrives
-- Timing display: shown after `done` event
-- Loading state: disable input + show spinner while query is in flight
-- Query history: last 5 queries shown as clickable chips to re-run
-- Error handling: display friendly message if SSE connection fails
-
-Use the `EventSource` API with `fetch` + `ReadableStream` (since `EventSource` doesn't support POST):
-
-```javascript
-const response = await fetch("/query", {
-  method: "POST",
-  headers: { "Content-Type": "application/json" },
-  body: JSON.stringify({ query }),
-});
-const reader = response.body.getReader();
-// parse SSE lines manually: "event: token\ndata: ...\n\n"
-```
-
-Style: minimal, dark theme, monospace answer font. No CSS frameworks needed.
-
----
-
-**4.6 — Keep `rag_query.py` as CLI entry point**
-
-Update to import from `api/pipelines.py` rather than duplicating logic:
-
-```python
-# rag_query.py — CLI wrapper
-import asyncio
-from api import pipelines
-
-async def main():
-    await pipelines.initialise()
-    # existing REPL loop, calling pipelines.hybrid_pipeline() / pipelines.lightrag_pipeline()
-
-if __name__ == "__main__":
-    asyncio.run(main())
-```
-
-This ensures CLI and web UI stay in sync — one source of truth for pipeline logic.
-
----
-
-**4.7 — Update `start.sh`**
-
-Add uvicorn startup:
-
-```bash
-# In start.sh, after starting Ollama instances:
-uvicorn api.app:app --host 0.0.0.0 --port 8000 --reload &
-echo "Web UI: http://localhost:8000"
-```
-
-`--reload` is fine for development; remove for stable use.
-
----
-
-**4.8 — Update `.env.sample`**
-
-Add:
-
-```
-SYMBAROUM_HOST=0.0.0.0
-SYMBAROUM_PORT=8000
-```
-
----
-
-#### Testing Checklist
-
-- [ ] `uv run uvicorn api.app:app` starts without errors, indexes load
-- [ ] `GET /` returns the HTML page
-- [ ] `POST /query` with a rules query streams tokens and ends with `done` event
-- [ ] `POST /query` with a relational query routes to lightrag and streams
-- [ ] Frontend displays tokens as they arrive (not all at once after completion)
-- [ ] Pipeline badge appears immediately after routing (before answer streams)
-- [ ] CLI (`uv run rag_query.py`) still works after refactor
-- [ ] `start.sh` brings up all services including uvicorn
-
----
-
-#### Notes & Decisions
-
-- **True streaming on hybrid path**: LlamaIndex's synchronous query engine makes true token streaming non-trivial. Emitting a single SSE event with the complete answer after running in a thread executor is acceptable for v0.7. The LightRAG path will have real token streaming. Revisit if the UX difference is noticeable.
-- **No authentication**: localhost only, not exposed externally. If WSL port forwarding is needed, add a note but no auth logic required.
-- **CORS**: Not needed for localhost serving from the same FastAPI app. Add if frontend is ever served separately.
-- **Git tag**: `v0.7-webui`
 
 ---
 
@@ -445,7 +212,7 @@ The architecture being built here maps cleanly to an SME RAG product:
 - Hybrid retrieval (vector + BM25 + reranker)
 - LightRAG for knowledge graph
 - Qdrant for scalable vector storage
-- FastAPI + web UI
+- FastAPI + SSE streaming web UI
 
 Key differences for a commercial product:
 
@@ -469,21 +236,19 @@ A future refactor could make the system configurable per-game with different pro
 ## Technical Debt & Cleanup
 
 - Add few-shot example for rewards/experience queries to keyword extraction prompt
-- Remove timing instrumentation from production query loop (or make DEBUG-only) ✓ (done in v0.6)
-- Add `.env.sample` entries for all new config vars as they're added
-- Write README.md with setup instructions ✓ (done in v0.6)
-- Handle Ollama connection errors gracefully (retry logic)
+- Handle Ollama connection errors gracefully (retry logic, friendly error in web UI)
 - Add query history to a local SQLite DB for reviewing past sessions
 - Consider abstracting the retrieval pipeline so LightRAG and hybrid RAG share a common interface
-- Suppress XLMRobertaTokenizerFast warning properly ✓ (done in v0.6)
-- Fix `asyncio.get_event_loop()` deprecation in LightRAG init (cosmetic)
+- True token streaming on hybrid path (requires bypassing LlamaIndex query engine for answer generation)
+- Update start.sh to launch uvicorn alongside Ollama instances
+- Update `.env.sample` with all current config vars
 
 ---
 
 ## Environment Reference
 
 ```
-Hardware:     RTX 4080 16GB, Windows 11, WSL2 Ubuntu on G:\WSL\Ubuntu
+Hardware:     RTX 4080 16GB, Windows 11, WSL2 Ubuntu
 Project:      ~/projects/symbaroum/
 Data:         ~/projects/symbaroum/data/ (gitignored)
 Indexes:      ~/projects/symbaroum/index/vector/, index/bm25/, index/lightrag/
@@ -495,14 +260,19 @@ Embeddings:   nomic-embed-text on localhost:11436
 
 ### Session Startup
 
-```
+```bash
 ~/projects/symbaroum/start.sh
+
+# Web UI:
+cd ~/projects/symbaroum && uv run uvicorn api.app:app --host 0.0.0.0 --port 8000
+
+# CLI:
 cd ~/projects/symbaroum && uv run rag_query.py
 ```
 
 ### Session Shutdown
 
-```
+```bash
 ~/projects/symbaroum/stop.sh
 ```
 
@@ -516,6 +286,7 @@ cd ~/projects/symbaroum && uv run rag_query.py
 | v0.4-docling-chunking          | Docling HybridChunker integration                             |
 | v0.5-performance               | Parallel utility calls, 5x speedup                            |
 | v0.6-lightrag                  | LightRAG knowledge graph, query router, three-instance Ollama |
+| v0.7-webui                     | FastAPI web UI, SSE streaming, pipeline refactor              |
 
 ---
 
@@ -537,13 +308,16 @@ cd ~/projects/symbaroum && uv run rag_query.py
 
 - Built `build_lightrag_index.py` — standalone one-time LightRAG indexer using Docling HybridChunker output
 - Used `test_lightrag.py` to prove LightRAG queries work with three-Ollama-instance setup before committing to full index build
-- Full index build: 881 chunks → 4215 entities, 8211 edges (completed in tmux)
+- Full index build: 881 chunks → 4215 entities, 8211 edges
 - Built `rag_query.py` — new inference script with query router + both pipelines
-- Tested against benchmark queries: routing consistently correct, answer quality good on both paths
+- Built FastAPI web UI with SSE streaming: `api/app.py`, `api/pipelines.py`, `api/models.py`, `static/index.html`
+- Refactored pipeline logic into shared module consumed by both CLI and web server
+- UI fixes via Claude Code: query cleared after submit, question shown above answer, env var deduplication
 - Key insight: qwen3.5 models do not reliably obey think=False — stayed with qwen3 family
 - Key insight: three concurrent Ollama instances (14b/1.7b/nomic) all fit in RTX 4080 VRAM simultaneously
 - Key insight: LightRAG response cache makes repeat queries ~1s regardless of graph complexity
-- Known issue: keyword extraction misfires occasionally on abstract queries (rewards, thematic questions)
+- Key insight: sync Ollama client deadlocks inside FastAPI event loop — must use AsyncClient throughout
+- Key insight: sse-starlette 3.x dropped dict yield format — raw StreamingResponse more reliable
 
 ---
 
