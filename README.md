@@ -2,33 +2,37 @@
 
 A local, private RAG system for querying Symbaroum rulebooks and adventure content in natural language. Runs entirely on local hardware — no cloud dependencies for inference.
 
-Built as a learning project for RAG/LLM techniques, using Symbaroum as the domain. This could be applied to any similar game system, or other systems, some of the references and prompts are specific to this game system.
+Built as a learning project for RAG/LLM techniques, using Symbaroum as the domain. This could be applied to any similar game system, or other systems; some references and prompts are specific to this game system.
 
 ## Stack
 
-| Component       | Technology                                         |
-| --------------- | -------------------------------------------------- |
-| PDF processing  | Docling (HybridChunker, Nomic tokenizer alignment) |
-| Embeddings      | `nomic-embed-text` via Ollama                      |
-| Vector store    | LlamaIndex with file-backed JSON                   |
-| Keyword search  | LlamaIndex BM25Retriever + manual RRF fusion       |
-| Reranker        | `BAAI/bge-reranker-base` cross-encoder             |
-| LLM (answers)   | `qwen3:14b` via Ollama (port 11434)                |
-| LLM (utility)   | `qwen3:1.7b` via Ollama (port 11435), think=False  |
-| Framework       | LlamaIndex + direct Ollama Python client           |
-| Package manager | uv                                                 |
+| Component       | Technology                                           |
+| --------------- | ---------------------------------------------------- |
+| PDF processing  | Docling (HybridChunker, Nomic tokenizer alignment)   |
+| Embeddings      | `nomic-embed-text` via Ollama (port 11436)           |
+| Vector store    | LlamaIndex with file-backed JSON                     |
+| Keyword search  | LlamaIndex BM25Retriever + manual RRF fusion         |
+| Knowledge graph | LightRAG (NetworkX + NanoVectorDB, file-backed)      |
+| Reranker        | `BAAI/bge-reranker-base` cross-encoder               |
+| Query router    | `qwen3:1.7b` classifies queries → hybrid or LightRAG |
+| LLM (answers)   | `qwen3:14b` via Ollama (port 11434)                  |
+| LLM (utility)   | `qwen3:1.7b` via Ollama (port 11435), think=False    |
+| Framework       | LlamaIndex + LightRAG + direct Ollama Python client  |
+| Package manager | uv                                                   |
+
+All three Ollama instances run concurrently to keep models resident in VRAM, avoiding load/unload overhead between pipeline steps.
 
 ## Setup
 
 ### Prerequisites
 
 - Ollama installed and running
-- CUDA-capable GPU recommended (tested on RTX 4080)
+- CUDA-capable GPU recommended (tested on RTX 4080 16GB)
 - uv
 
 ### Install
 
-```bash
+```
 git clone <repo>
 cd symbaroum
 uv sync
@@ -36,7 +40,7 @@ uv sync
 
 Pull the required Ollama models:
 
-```bash
+```
 ollama pull qwen3:14b
 ollama pull qwen3:1.7b
 ollama pull nomic-embed-text
@@ -44,30 +48,53 @@ ollama pull nomic-embed-text
 
 Place your Symbaroum PDFs in `data/`.
 
-### Running
+### Building the indexes
 
-```bash
-./start.sh          # starts both Ollama instances
+On first run, build the vector and BM25 indexes:
+
+```
 uv run rag_symbaroum.py
 ```
 
-```bash
-./stop.sh           # shuts down Ollama instances
+This converts PDFs via Docling and saves indexes to `index/vector/` and `index/bm25/`. Subsequent runs load from disk in seconds.
+
+Build the LightRAG knowledge graph index (one-time, slow — expect several hours on a single book):
+
+```
+./start.sh
+uv run build_lightrag_index.py
 ```
 
-On first run, Docling converts the PDFs and builds the vector + BM25 indexes (saved to `index/`). Subsequent runs load from disk in seconds.
+The indexer saves progress after each chunk and resumes automatically if interrupted.
+
+### Running
+
+```
+./start.sh              # starts all three Ollama instances
+uv run rag_query.py     # launch the GM assistant
+```
+
+```
+./stop.sh               # shuts down Ollama instances
+```
+
+Set `SYMBAROUM_DEBUG=1` in your environment for detailed retrieval output and timings.
 
 ## How It Works
 
-Queries go through a pipeline:
+Each query goes through a routing pipeline:
 
-1. **Query rewriting** — LLM rewrites the query for better vector retrieval
-2. **Keyword extraction** — few-shot prompted LLM extracts Symbaroum-specific named entities
-3. **Hybrid retrieval** — vector search + BM25, fused with reciprocal rank fusion (BM25 weighted 2x)
-4. **Reranking** — cross-encoder reranker scores and filters retrieved chunks
-5. **Answer generation** — `qwen3:14b` synthesises a grounded answer from the top chunks
+1. **Routing** — `qwen3:1.7b` classifies the query as `hybrid` or `lightrag`
+2. **Hybrid path** (rules lookups, stat blocks, single-topic factual queries):
+   - Query rewriting and keyword extraction run in parallel via `qwen3:1.7b`
+   - Vector search + BM25 retrieval, fused with reciprocal rank fusion (BM25 weighted 2x)
+   - Cross-encoder reranker (`bge-reranker-base`) scores and filters to top 8 chunks
+   - `qwen3:14b` synthesises a grounded answer
+3. **LightRAG path** (cross-referencing, relationships, adventure+rules connections):
+   - Queries the knowledge graph in `mix` mode (graph traversal + vector search combined)
+   - `qwen3:14b` synthesises from graph context with LLM response caching for repeat queries
 
-Steps 1 and 2 run in parallel via `ThreadPoolExecutor`. Total query time: ~12s.
+Typical query times: hybrid ~10–40s depending on answer complexity, LightRAG ~60s first call / ~1s cached.
 
 ## Project Evolution
 
@@ -78,10 +105,10 @@ Steps 1 and 2 run in parallel via `ThreadPoolExecutor`. Total query time: ~12s.
 | v0.3    | Cross-encoder reranker, query rewriting, few-shot keyword extraction |
 | v0.4    | Docling PDF → HybridChunker (replaced Marker Markdown pipeline)      |
 | v0.5    | Parallel utility LLM calls, dedicated small model — 5x query speedup |
+| v0.6    | LightRAG knowledge graph, query router, three-instance Ollama setup  |
 
 ## Roadmap
 
-- **LightRAG (GraphRAG)** — solve cross-referencing between adventure encounters and bestiary entries
 - **Qdrant** — replace in-memory JSON store for multi-document scale
 - **Multi-document support** — index remaining Symbaroum books
 - **Web UI** — Gradio or FastAPI frontend

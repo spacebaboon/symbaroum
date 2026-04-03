@@ -13,13 +13,15 @@ A local, private RAG (Retrieval-Augmented Generation) system that allows a Game 
 ### Current Stack
 
 - **PDF processing**: Docling (HybridChunker with Nomic tokenizer alignment)
-- **Embeddings**: Nomic-embed-text via Ollama
+- **Embeddings**: Nomic-embed-text via Ollama (port 11436, dedicated instance)
 - **Vector store**: LlamaIndex in-memory JSON (file-backed)
 - **BM25**: LlamaIndex BM25Retriever with manual RRF fusion
+- **Knowledge graph**: LightRAG (NetworkX + NanoVectorDB, file-backed)
 - **Reranker**: BAAI/bge-reranker-base (cross-encoder)
-- **LLM (answers)**: qwen3:14b via Ollama
-- **LLM (utility)**: qwen3:1.7b via second Ollama instance (port 11435), think=False
-- **Framework**: LlamaIndex + direct Ollama Python client
+- **Query router**: qwen3:1.7b classifies queries → hybrid or lightrag path
+- **LLM (answers)**: qwen3:14b via Ollama (port 11434)
+- **LLM (utility)**: qwen3:1.7b via Ollama (port 11435), think=False
+- **Framework**: LlamaIndex + LightRAG + direct Ollama Python client
 - **Package manager**: uv
 
 ### Key Design Decisions Made
@@ -29,6 +31,12 @@ A local, private RAG (Retrieval-Augmented Generation) system that allows a Game 
 - Direct Ollama client for utility calls (bypasses LlamaIndex for think=False support)
 - Parallel utility LLM calls (ThreadPoolExecutor, ~0.5s vs ~48s sequential)
 - Native Linux filesystem (~/) over /mnt/g/ (5x I/O performance improvement)
+- Three concurrent Ollama instances to keep all models resident in VRAM simultaneously
+- LightRAG over LazyGraphRAG (fully open source, active Ollama support; LazyGraphRAG not cleanly available for local use)
+- Router temperature=0 for deterministic path selection
+- LightRAG `mix` mode for queries (graph traversal + vector combined)
+- `build_lightrag_index.py` as a separate one-time indexing script (not part of inference)
+- `rag_query.py` as the primary inference entry point (replaces `rag_symbaroum.py` for daily use)
 
 ---
 
@@ -69,6 +77,17 @@ A local, private RAG (Retrieval-Augmented Generation) system that allows a Game 
 - 5x query speedup: 60s → 12s
 - Start/stop shell scripts for VRAM management
 
+### v0.6 — LightRAG Knowledge Graph + Query Router ✓
+
+- `build_lightrag_index.py`: standalone one-time indexer using Docling HybridChunker output
+- LightRAG index: 881 chunks → 4215 entities, 8211 edges (core rulebook + tutorial adventure)
+- Three Ollama instances (11434/11435/11436) kept resident simultaneously — no VRAM eviction
+- `rag_query.py`: new inference script combining both pipelines behind a query router
+- Router: qwen3:1.7b classifies queries → hybrid (rules/factual) or LightRAG (relational/cross-ref)
+- LightRAG response caching: repeat queries ~1s (vs ~60s first call)
+- Logging cleanup: LightRAG INFO suppressed in normal mode, DEBUG flag for full output
+- Routing determinism: temperature=0 on router call
+
 ---
 
 ## Current State
@@ -77,141 +96,86 @@ A local, private RAG (Retrieval-Augmented Generation) system that allows a Game 
 
 - Rules queries: accurate, well-cited answers for abilities, conditions, combat rules
 - Adventure queries: finding NPCs, scenes, tactics with correct details
-- Named entity retrieval: few-shot keyword extraction resolves "elves" → "Godrai Saran-Ri"
-- Query timing: ~12s total (0.5s utility, 2s retrieval/reranking, 8-10s answer)
+- Named entity retrieval: few-shot keyword extraction resolves generic terms to named entities
+- Cross-reference queries: LightRAG correctly handles adventure+rules relationships
+- Routing: consistently sends factual queries to hybrid, relational queries to LightRAG
+- Query timing: hybrid ~10–40s, LightRAG ~60s first call / ~1s cached
+- All three models stay resident in VRAM — no load/unload overhead
 
 ### Known Limitations
 
-- Cross-referencing: adventure encounter descriptions + bestiary stat blocks in separate chunks
-- qwen3.5:9b: excellent answer quality but think=False not working via LlamaIndex
-- "What are the main events in The Promised Land" occasionally fails (retrieval variance)
-- Rewards/experience queries miss adventure-specific content
+- LightRAG INFO logging cannot be suppressed via Python logging (uses print internally)
+- Keyword extraction occasionally misfires on abstract queries (e.g. extracted "Godrai Saran-Ri" for a rewards query) — BM25 path still recovers via reranker
+- LightRAG first-call latency ~60s (mitigated by response cache for repeat queries)
 - Single document only (core rulebook + tutorial adventure)
+- `asyncio.get_event_loop()` deprecation warning during LightRAG init (cosmetic, not functional)
 
 ---
 
 ## Immediate Next Steps
 
-### Task 1: LightRAG Integration (GraphRAG)
+### Task 2: Qdrant Vector Database
 
-**Goal**: Solve the cross-referencing problem — connect adventure encounters to bestiary entries to rule descriptions  
-**Priority**: High  
-**Estimated effort**: 1-2 sessions
-
-#### Why LightRAG over LazyGraphRAG
-
-LazyGraphRAG is conceptually superior (NLP-only indexing, zero LLM calls at index time) but Microsoft's standalone open source implementation is not fully available for local use — it's primarily deployed via Azure/Microsoft Discovery. LightRAG is fully open source, actively maintained, has explicit Ollama support, and the concepts transfer directly. LazyGraphRAG remains worth revisiting if a clean local release lands.
-
-#### Subtasks
-
-- [x] Install LightRAG (`uv add lightrag-hku`)
-- [x] Write Docling→LightRAG text converter (reuse contextualized HybridChunker output)
-- [x] Configure LightRAG with Ollama LLM and Nomic embeddings
-- [ ] Benchmark entity extraction models (qwen3:8b vs qwen3:14b vs qwen3:1.7b)
-- [ ] Run one-time indexing, save graph to `index/lightrag/`
-- [ ] Build query router: rules queries → hybrid RAG, adventure/cross-ref queries → LightRAG
-- [ ] Test cross-reference queries: "monsters in The Promised Land with abilities"
-- [x] Add LightRAG index path to .env and start/stop scripts
-- [ ] Git tag: v0.6-lightrag
-
-#### Research notes
-
-- LightRAG input: plain text or Markdown (not Docling JSON natively)
-- Solution: custom loader using contextualized HybridChunker output joined with separators
-- LightRAG GitHub: `HKUDS/LightRAG`
-- Key config: custom LLM function (async) pointing at Ollama, custom embedding function pointing at Nomic
-- Entity extraction is a one-time cost — ~900 chunks on qwen3:14b, expect 30-60 mins
-- Consider qwen3:8b for extraction: cheaper, still good at structured entity recognition
-
----
-
-### Task 2: qwen3.5:9b Custom LLM Wrapper (Optional)
-
-**Goal**: Enable qwen3.5:9b for answer generation with thinking disabled  
-**Priority**: Low-Medium (investigate as separate task)  
+**Goal**: Replace in-memory JSON store with proper vector DB for multi-document scale  
+**Priority**: Medium (needed before adding a second document)  
 **Estimated effort**: 0.5 sessions
 
 #### Subtasks
 
-- [ ] Create custom LlamaIndex LLM class wrapping direct Ollama client
-- [ ] Pass think=False at the API level, not via additional_kwargs
-- [ ] Test answer quality vs qwen3:14b on standard query set
-- [ ] Benchmark: qwen3.5:9b no-think vs qwen3:14b with thinking
-- [ ] Update .env and start.sh if adopted
-
-#### Notes
-
-- qwen3.5:9b without thinking: excellent quality, 35s (too slow)
-- qwen3.5:9b with broken think=False: 71s + garbage output (unusable)
-- qwen3:14b current baseline: ~12s total, good quality
-- Target: qwen3.5:9b at ~12s with equal or better quality
+- Install Qdrant via Docker: `docker run -p 6333:6333 qdrant/qdrant`
+- Add `llama-index-vector-stores-qdrant` dependency
+- Replace `VectorStoreIndex` JSON store with Qdrant backend
+- Test incremental upsert (add new book without full rebuild)
+- Add Qdrant startup to start.sh
+- Update stop.sh to preserve Qdrant data between sessions
+- Git tag: v0.7-qdrant
 
 ---
-
-## Near-Term Roadmap
 
 ### Task 3: Multi-Document Support
 
 **Goal**: Add remaining Symbaroum content (adventure modules, additional sourcebooks)  
 **Priority**: High (unlocks the full GM assistant vision)  
-**Dependencies**: Qdrant (Task 4)
+**Dependencies**: Qdrant (Task 2)
 
 #### Subtasks
 
-- [ ] Inventory all owned Symbaroum PDFs
-- [ ] Run Docling conversion on each (one-time, save JSON)
-- [ ] Design metadata schema: `{source: "core_rulebook", type: "rules|adventure|bestiary"}`
-- [ ] Add per-document metadata to nodes at index time
-- [ ] Update query engine to support metadata filtering
-- [ ] Update keyword extraction prompt with new content awareness
-- [ ] Test cross-document queries: "adventures that feature corruption themes"
+- Inventory all owned Symbaroum PDFs
+- Run Docling conversion on each (one-time, save JSON)
+- Design metadata schema: `{source: "core_rulebook", type: "rules|adventure|bestiary"}`
+- Add per-document metadata to nodes at index time
+- Update query engine to support metadata filtering
+- Update keyword extraction prompt with new content awareness
+- Rebuild LightRAG index with all documents
+- Test cross-document queries: "adventures that feature corruption themes"
 
 ---
 
-### Task 4: Qdrant Vector Database
-
-**Goal**: Replace in-memory JSON store with proper vector DB for multi-document scale  
-**Priority**: Medium (needed before second document)  
-**Estimated effort**: 0.5 sessions
-
-#### Subtasks
-
-- [ ] Install Qdrant via Docker: `docker run -p 6333:6333 qdrant/qdrant`
-- [ ] Add `llama-index-vector-stores-qdrant` dependency
-- [ ] Replace `VectorStoreIndex` JSON store with Qdrant backend
-- [ ] Test incremental upsert (add new book without full rebuild)
-- [ ] Add Qdrant startup to start.sh
-- [ ] Update stop.sh to preserve Qdrant data between sessions
-- [ ] Git tag: v0.7-qdrant
-
----
-
-### Task 5: Simple Web UI
+### Task 4: Simple Web UI
 
 **Goal**: A basic web interface — nicer than CLI, good learning exercise in serving ML pipelines  
-**Priority**: Medium (nice to have, not critical)  
+**Priority**: Medium  
 **Estimated effort**: 1 session
 
 #### Subtasks
 
-- [ ] Choose framework: Gradio (quickest) or FastAPI + minimal HTML (more control)
-- [ ] Implement REST endpoint: POST /query → {answer, timings, chunks}
-- [ ] Basic web UI: query input, answer display, source chunks toggle
-- [ ] Handle streaming responses for faster perceived performance
-- [ ] Consider session history: last N queries visible
-- [ ] Git tag: v0.8-webui
+- Choose framework: Gradio (quickest) or FastAPI + minimal HTML (more control)
+- Implement REST endpoint: POST /query → {answer, pipeline, timings}
+- Basic web UI: query input, answer display, pipeline indicator, optional timing breakdown
+- Handle streaming responses for faster perceived performance
+- Consider session history: last N queries visible
+- Git tag: v0.8-webui
 
 #### Notes
 
 - Gradio is the fastest path to a working UI and good for learning
 - FastAPI + minimal HTML is better if you want to understand the serving layer
-- Not mobile-critical — desktop browser is fine
 
 ---
 
 ## Medium-Term Roadmap
 
-### Task 6: Homebrew Content Generation
+### Task 5: Homebrew Content Generation
 
 **Goal**: Generate NPCs, encounters, locations consistent with Symbaroum lore  
 **Priority**: Medium  
@@ -219,28 +183,28 @@ LazyGraphRAG is conceptually superior (NLP-only indexing, zero LLM calls at inde
 
 #### Subtasks
 
-- [ ] Design generation prompts using retrieved lore as context
-- [ ] NPC generator: name, background, stats appropriate to location/role
-- [ ] Encounter generator: monsters appropriate to region + threat level
-- [ ] Location generator: ruins/settlements consistent with Davokar lore
-- [ ] Test output consistency with canonical content
-- [ ] Consider structured output (JSON stat blocks vs narrative)
+- Design generation prompts using retrieved lore as context
+- NPC generator: name, background, stats appropriate to location/role
+- Encounter generator: monsters appropriate to region + threat level
+- Location generator: ruins/settlements consistent with Davokar lore
+- Test output consistency with canonical content
+- Consider structured output (JSON stat blocks vs narrative)
 
 ---
 
-### Task 7: NPC/Encounter Generator (Structured)
+### Task 6: NPC/Encounter Generator (Structured)
 
 **Goal**: Generate game-ready stat blocks and encounter descriptions  
 **Priority**: Medium  
-**Dependencies**: Task 7
+**Dependencies**: Task 5
 
 #### Subtasks
 
-- [ ] Define Symbaroum stat block schema (all attributes, abilities, traits, tactics)
-- [ ] Fine-tune prompts to generate valid stat blocks
-- [ ] Validate generated stats against game balance guidelines from rulebook
-- [ ] Consider lightweight fine-tuning on extracted stat block data
-- [ ] Integration with web UI as a separate generator tab
+- Define Symbaroum stat block schema (all attributes, abilities, traits, tactics)
+- Fine-tune prompts to generate valid stat blocks
+- Validate generated stats against game balance guidelines from rulebook
+- Consider lightweight fine-tuning on extracted stat block data
+- Integration with web UI as a separate generator tab
 
 ---
 
@@ -277,13 +241,15 @@ A future refactor could make the system configurable per-game with different pro
 
 ## Technical Debt & Cleanup
 
-- [ ] Remove timing instrumentation from production query loop (or make DEBUG-only)
-- [ ] Add `.env.sample` entries for all new config vars as they're added
-- [ ] Write README.md with setup instructions
-- [ ] Handle Ollama connection errors gracefully (retry logic)
-- [ ] Add query history to a local SQLite DB for reviewing past sessions
-- [ ] Consider abstracting the retrieval pipeline so LightRAG and hybrid RAG share a common interface
-- [ ] Suppress XLMRobertaTokenizerFast warning properly
+- Add few-shot example for rewards/experience queries to keyword extraction prompt
+- Remove timing instrumentation from production query loop (or make DEBUG-only) ✓ (done in v0.6)
+- Add `.env.sample` entries for all new config vars as they're added
+- Write README.md with setup instructions ✓ (done in v0.6)
+- Handle Ollama connection errors gracefully (retry logic)
+- Add query history to a local SQLite DB for reviewing past sessions
+- Consider abstracting the retrieval pipeline so LightRAG and hybrid RAG share a common interface
+- Suppress XLMRobertaTokenizerFast warning properly ✓ (done in v0.6)
+- Fix `asyncio.get_event_loop()` deprecation in LightRAG init (cosmetic)
 
 ---
 
@@ -293,35 +259,36 @@ A future refactor could make the system configurable per-game with different pro
 Hardware:     RTX 4080 16GB, Windows 11, WSL2 Ubuntu on G:\WSL\Ubuntu
 Project:      ~/projects/symbaroum/
 Data:         ~/projects/symbaroum/data/ (gitignored)
-Indexes:      ~/projects/symbaroum/index/vector/ and index/bm25/
+Indexes:      ~/projects/symbaroum/index/vector/, index/bm25/, index/lightrag/
 Models:       ~/.ollama/models/
 Primary LLM:  qwen3:14b on localhost:11434
-Utility LLM:  qwen3:1.7b on localhost:11435 (think=False)
-Embeddings:   nomic-embed-text via Ollama
+Utility LLM:  qwen3:1.7b on localhost:11435 (think=False, temperature=0 for routing)
+Embeddings:   nomic-embed-text on localhost:11436
 ```
 
 ### Session Startup
 
-```bash
+```
 ~/projects/symbaroum/start.sh
-cd ~/projects/symbaroum && uv run rag_symbaroum.py
+cd ~/projects/symbaroum && uv run rag_query.py
 ```
 
 ### Session Shutdown
 
-```bash
+```
 ~/projects/symbaroum/stop.sh
 ```
 
 ### Git Tags
 
-| Tag                            | Description                             |
-| ------------------------------ | --------------------------------------- |
-| v0.1-basic-rag                 | Basic vector RAG with LlamaIndex        |
-| v0.2-hybrid-retrieval          | BM25 + vector hybrid search             |
-| v0.3-reranking-query-rewriting | Cross-encoder reranker, query rewriting |
-| v0.4-docling-chunking          | Docling HybridChunker integration       |
-| v0.5-performance               | Parallel utility calls, 5x speedup      |
+| Tag                            | Description                                                   |
+| ------------------------------ | ------------------------------------------------------------- |
+| v0.1-basic-rag                 | Basic vector RAG with LlamaIndex                              |
+| v0.2-hybrid-retrieval          | BM25 + vector hybrid search                                   |
+| v0.3-reranking-query-rewriting | Cross-encoder reranker, query rewriting                       |
+| v0.4-docling-chunking          | Docling HybridChunker integration                             |
+| v0.5-performance               | Parallel utility calls, 5x speedup                            |
+| v0.6-lightrag                  | LightRAG knowledge graph, query router, three-instance Ollama |
 
 ---
 
@@ -339,6 +306,18 @@ cd ~/projects/symbaroum && uv run rag_symbaroum.py
 - Key insight: keyword extraction needs few-shot Symbaroum examples to resolve generic terms to named entities
 - Key insight: utility LLM calls were 81% of total query time — small model + direct client → 5x speedup
 
+### 2026-04-03 (Session 4)
+
+- Built `build_lightrag_index.py` — standalone one-time LightRAG indexer using Docling HybridChunker output
+- Used `test_lightrag.py` to prove LightRAG queries work with three-Ollama-instance setup before committing to full index build
+- Full index build: 881 chunks → 4215 entities, 8211 edges (completed in tmux)
+- Built `rag_query.py` — new inference script with query router + both pipelines
+- Tested against benchmark queries: routing consistently correct, answer quality good on both paths
+- Key insight: qwen3.5 models do not reliably obey think=False — stayed with qwen3 family
+- Key insight: three concurrent Ollama instances (14b/1.7b/nomic) all fit in RTX 4080 VRAM simultaneously
+- Key insight: LightRAG response cache makes repeat queries ~1s regardless of graph complexity
+- Known issue: keyword extraction misfires occasionally on abstract queries (rewards, thematic questions)
+
 ---
 
-_Last updated: 2026-03-24_
+_Last updated: 2026-04-03_

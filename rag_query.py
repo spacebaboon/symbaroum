@@ -1,5 +1,6 @@
 import asyncio
 import json
+import logging
 import os
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -20,18 +21,28 @@ from llama_index.retrievers.bm25 import BM25Retriever
 import ollama as ollama_client
 
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
+os.environ["TRANSFORMERS_VERBOSITY"] = "error"
 
 load_dotenv()
 
 # Config
-INDEX_DIR = os.environ.get("SYMBAROUM_INDEX_DIR", "./index/vector")
-BM25_PATH = os.environ.get("SYMBAROUM_BM25_DIR", "./index/bm25")
+INDEX_DIR    = os.environ.get("SYMBAROUM_INDEX_DIR",    "./index/vector")
+BM25_PATH    = os.environ.get("SYMBAROUM_BM25_DIR",     "./index/bm25")
 LIGHTRAG_DIR = os.environ.get("SYMBAROUM_LIGHTRAG_DIR", "./index/lightrag")
-LLM_MODEL = os.environ.get("SYMBAROUM_LLM_MODEL", "qwen3:14b")
+LLM_MODEL    = os.environ.get("SYMBAROUM_LLM_MODEL",    "qwen3:14b")
 UTILITY_MODEL = os.environ.get("SYMBAROUM_UTILITY_MODEL", "qwen3:1.7b")
-EMBED_MODEL = os.environ.get("SYMBAROUM_EMBED_MODEL", "nomic-embed-text")
-EMBED_HOST = os.environ.get("SYMBAROUM_EMBED_HOST", "http://127.0.0.1:11436")
-DEBUG = os.environ.get("SYMBAROUM_DEBUG", "").lower() in ("1", "true", "yes")
+EMBED_MODEL  = os.environ.get("SYMBAROUM_EMBED_MODEL",  "nomic-embed-text")
+EMBED_HOST   = os.environ.get("SYMBAROUM_EMBED_HOST",   "http://127.0.0.1:11436")
+DEBUG        = os.environ.get("SYMBAROUM_DEBUG", "").lower() in ("1", "true", "yes")
+
+# ---------------------------------------------------------------------------
+# Logging — suppress LightRAG/nano-vectordb INFO unless DEBUG
+# ---------------------------------------------------------------------------
+
+if not DEBUG:
+    logging.getLogger("lightrag").setLevel(logging.WARNING)
+    logging.getLogger("nano-vectordb").setLevel(logging.WARNING)
+    logging.getLogger("httpx").setLevel(logging.WARNING)
 
 # ---------------------------------------------------------------------------
 # Model setup
@@ -44,13 +55,13 @@ Settings.llm = Ollama(
     context_window=8192,
     keepalive="24h",
 )
+
 Settings.embed_model = OllamaEmbedding(
     model_name=EMBED_MODEL,
     base_url=EMBED_HOST,
 )
 
 utility_client = ollama_client.Client(host="http://127.0.0.1:11435")
-
 
 # ---------------------------------------------------------------------------
 # Utility LLM functions
@@ -97,7 +108,8 @@ def route_query(query: str) -> str:
     """
     Decide which pipeline to use for this query.
     Returns 'hybrid' or 'lightrag'.
-    - hybrid: simple factual lookups, rules queries, stat blocks
+
+    - hybrid:   simple factual lookups, rules queries, stat blocks
     - lightrag: cross-referencing, relationships, thematic/global queries
     """
     response = utility_client.chat(
@@ -114,11 +126,11 @@ def route_query(query: str) -> str:
             f"Query: {query}"
         }],
         think=False,
+        options={"temperature": 0},
     )
     result = response.message.content.strip().lower()
     # Fallback to hybrid if response is unexpected
     return "lightrag" if "lightrag" in result else "hybrid"
-
 
 # ---------------------------------------------------------------------------
 # LightRAG async helpers
@@ -139,11 +151,13 @@ async def ollama_chat_nothink(
 ) -> str:
     kwargs.pop("hashing_kv", None)
     kwargs.pop("max_tokens", None)
+
     messages = []
     if system_prompt:
         messages.append({"role": "system", "content": system_prompt})
     messages.extend(history_messages)
     messages.append({"role": "user", "content": prompt})
+
     client = ollama_client.AsyncClient(host="http://127.0.0.1:11434")
     response = await client.chat(
         model=LLM_MODEL,
@@ -155,7 +169,10 @@ async def ollama_chat_nothink(
 
 
 async def lightrag_query(rag: LightRAG, query: str) -> str:
-    return await rag.aquery(query, param=QueryParam(mode="mix"))
+    return await rag.aquery(
+        query,
+        param=QueryParam(mode="mix", enable_rerank=False),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -191,7 +208,7 @@ rag = LightRAG(
         ]
     },
 )
-asyncio.get_event_loop().run_until_complete(rag.initialize_storages())
+asyncio.run(rag.initialize_storages())
 print("LightRAG index loaded.")
 
 # ---------------------------------------------------------------------------
@@ -254,9 +271,11 @@ def run_hybrid_pipeline(query: str) -> tuple[str, dict]:
         seen_ids[node.node_id] = seen_ids.get(node.node_id, 0) + 1 / (rank + 1)
     for rank, node in enumerate(bm25_nodes):
         seen_ids[node.node_id] = seen_ids.get(node.node_id, 0) + 2 / (rank + 1)
+
     all_nodes = {}
     for n in vector_nodes + bm25_nodes:
         all_nodes[n.node_id] = n.node
+
     fused = sorted(all_nodes.values(), key=lambda n: seen_ids[n.node_id], reverse=True)[:15]
     timings['fusion'] = time.time() - t
 
@@ -283,7 +302,7 @@ def run_hybrid_pipeline(query: str) -> tuple[str, dict]:
 def run_lightrag_pipeline(query: str) -> tuple[str, dict]:
     timings = {}
     t = time.time()
-    answer = asyncio.get_event_loop().run_until_complete(lightrag_query(rag, query))
+    answer = asyncio.run(lightrag_query(rag, query))
     timings['lightrag_query'] = time.time() - t
     return answer, timings
 
@@ -308,9 +327,7 @@ while True:
     pipeline = route_query(query)
     route_time = time.time() - t
 
-    if DEBUG:
-        print(f"\nRouted to: {pipeline} ({route_time:.1f}s)")
-
+    print(f"\nRouted to: {pipeline} ({route_time:.1f}s)")
     print("\nThinking...\n")
 
     if pipeline == "lightrag":
@@ -319,12 +336,12 @@ while True:
         answer, timings = run_hybrid_pipeline(query)
 
     total = time.time() - total_start
+
     print(f"Answer [{pipeline}]:\n{answer}\n")
 
     if DEBUG:
         print(f"Timings:")
-        if DEBUG:
-            print(f"  {'route':20s}: {route_time:.1f}s")
+        print(f"  {'route':20s}: {route_time:.1f}s")
         for stage, t in timings.items():
             print(f"  {stage:20s}: {t:.1f}s")
         print(f"  {'TOTAL':20s}: {total:.1f}s")

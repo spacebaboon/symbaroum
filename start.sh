@@ -40,4 +40,4 @@ curl -s --max-time 30 http://localhost:11436/api/embed \
     -d '{"model":"nomic-embed-text","input":["hi"]}' > /dev/null
 
 echo "All models loaded."
-echo "Ready! Run: uv run rag_symbaroum.py"
+echo "Ready! Run: uv run rag_query.py"
