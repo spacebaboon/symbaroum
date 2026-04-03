@@ -1,0 +1,481 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Symbaroum GM Assistant</title>
+    <style>
+      :root {
+        --bg: #1a1a1a;
+        --surface: #242424;
+        --surface2: #2e2e2e;
+        --border: #3a3a3a;
+        --text: #e0d8cc;
+        --text-dim: #888;
+        --accent: #c9923a;
+        --accent2: #7a9e7e;
+        --hybrid: #c9923a;
+        --lightrag: #7a9e7e;
+        --error: #c0392b;
+        --radius: 6px;
+        --font-mono: "JetBrains Mono", "Fira Mono", "Consolas", monospace;
+        --font-ui: system-ui, -apple-system, sans-serif;
+      }
+
+      * {
+        box-sizing: border-box;
+        margin: 0;
+        padding: 0;
+      }
+
+      body {
+        background: var(--bg);
+        color: var(--text);
+        font-family: var(--font-ui);
+        min-height: 100vh;
+        display: flex;
+        flex-direction: column;
+      }
+
+      /* ---- Header ---- */
+      header {
+        padding: 1rem 1.5rem;
+        border-bottom: 1px solid var(--border);
+        display: flex;
+        align-items: baseline;
+        gap: 1rem;
+      }
+
+      header h1 {
+        font-size: 1.1rem;
+        font-weight: 600;
+        letter-spacing: 0.04em;
+        color: var(--accent);
+      }
+
+      header span {
+        font-size: 0.8rem;
+        color: var(--text-dim);
+      }
+
+      /* ---- Main layout ---- */
+      main {
+        flex: 1;
+        display: flex;
+        flex-direction: column;
+        max-width: 900px;
+        width: 100%;
+        margin: 0 auto;
+        padding: 1.5rem;
+        gap: 1.25rem;
+      }
+
+      /* ---- Input area ---- */
+      .input-area {
+        display: flex;
+        gap: 0.75rem;
+        align-items: flex-start;
+      }
+
+      textarea {
+        flex: 1;
+        background: var(--surface);
+        border: 1px solid var(--border);
+        border-radius: var(--radius);
+        color: var(--text);
+        font-family: var(--font-ui);
+        font-size: 0.95rem;
+        padding: 0.75rem 1rem;
+        resize: vertical;
+        min-height: 4rem;
+        max-height: 12rem;
+        outline: none;
+        transition: border-color 0.15s;
+      }
+
+      textarea:focus {
+        border-color: var(--accent);
+      }
+
+      textarea:disabled {
+        opacity: 0.5;
+        cursor: not-allowed;
+      }
+
+      button#submit {
+        background: var(--accent);
+        border: none;
+        border-radius: var(--radius);
+        color: #1a1a1a;
+        cursor: pointer;
+        font-size: 0.9rem;
+        font-weight: 600;
+        padding: 0.75rem 1.25rem;
+        white-space: nowrap;
+        transition: opacity 0.15s;
+      }
+
+      button#submit:hover {
+        opacity: 0.85;
+      }
+      button#submit:disabled {
+        opacity: 0.4;
+        cursor: not-allowed;
+      }
+
+      /* ---- History chips ---- */
+      #history {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.5rem;
+        min-height: 1.5rem;
+      }
+
+      .chip {
+        background: var(--surface2);
+        border: 1px solid var(--border);
+        border-radius: 999px;
+        color: var(--text-dim);
+        cursor: pointer;
+        font-size: 0.78rem;
+        max-width: 260px;
+        overflow: hidden;
+        padding: 0.25rem 0.75rem;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        transition:
+          border-color 0.15s,
+          color 0.15s;
+      }
+
+      .chip:hover {
+        border-color: var(--accent);
+        color: var(--text);
+      }
+
+      /* ---- Answer card ---- */
+      #answer-card {
+        background: var(--surface);
+        border: 1px solid var(--border);
+        border-radius: var(--radius);
+        display: none;
+        flex-direction: column;
+        gap: 0;
+      }
+
+      .card-question {
+        color: var(--text);
+        font-size: 0.95rem;
+        font-weight: 600;
+        padding: 0.75rem 1.25rem;
+        border-bottom: 1px solid var(--border);
+        background: var(--surface2);
+      }
+
+      #answer-card.visible {
+        display: flex;
+      }
+
+      .card-header {
+        align-items: center;
+        border-bottom: 1px solid var(--border);
+        display: flex;
+        gap: 0.75rem;
+        padding: 0.6rem 1rem;
+      }
+
+      .pipeline-badge {
+        border-radius: 999px;
+        font-size: 0.72rem;
+        font-weight: 700;
+        letter-spacing: 0.06em;
+        padding: 0.2rem 0.65rem;
+        text-transform: uppercase;
+      }
+
+      .pipeline-badge.hybrid {
+        background: var(--hybrid);
+        color: #1a1a1a;
+      }
+      .pipeline-badge.lightrag {
+        background: var(--lightrag);
+        color: #1a1a1a;
+      }
+      .pipeline-badge.routing {
+        background: var(--surface2);
+        color: var(--text-dim);
+      }
+
+      .spinner {
+        width: 14px;
+        height: 14px;
+        border: 2px solid var(--border);
+        border-top-color: var(--accent);
+        border-radius: 50%;
+        animation: spin 0.7s linear infinite;
+        display: none;
+      }
+
+      .spinner.active {
+        display: block;
+      }
+
+      @keyframes spin {
+        to {
+          transform: rotate(360deg);
+        }
+      }
+
+      .timing {
+        color: var(--text-dim);
+        font-size: 0.78rem;
+        margin-left: auto;
+      }
+
+      #answer-text {
+        font-family: var(--font-mono);
+        font-size: 0.88rem;
+        line-height: 1.7;
+        padding: 1rem 1.25rem;
+        white-space: pre-wrap;
+        word-break: break-word;
+        min-height: 3rem;
+      }
+
+      /* ---- Error ---- */
+      #error-msg {
+        background: #2a1a1a;
+        border: 1px solid var(--error);
+        border-radius: var(--radius);
+        color: #e87070;
+        display: none;
+        font-size: 0.88rem;
+        padding: 0.75rem 1rem;
+      }
+
+      #error-msg.visible {
+        display: block;
+      }
+
+      /* ---- Markdown-lite rendering ---- */
+      .md-h3 {
+        color: var(--accent);
+        font-size: 0.95rem;
+        font-weight: 700;
+        margin-top: 0.75em;
+      }
+      .md-bold {
+        color: var(--text);
+        font-weight: 700;
+      }
+      .md-li {
+        padding-left: 1.2em;
+        text-indent: -1.2em;
+      }
+    </style>
+  </head>
+  <body>
+    <header>
+      <h1>⚔ Symbaroum GM Assistant</h1>
+      <span>local RAG · qwen3:14b</span>
+    </header>
+
+    <main>
+      <div class="input-area">
+        <textarea
+          id="query-input"
+          placeholder="Ask about rules, abilities, NPCs, adventure scenes…"
+          rows="3"
+        ></textarea>
+        <button id="submit">Ask</button>
+      </div>
+
+      <div id="history"></div>
+
+      <div id="answer-card">
+        <div class="card-header">
+          <span class="pipeline-badge routing" id="pipeline-badge"
+            >routing…</span
+          >
+          <div class="spinner" id="spinner"></div>
+          <span class="timing" id="timing"></span>
+        </div>
+        <div class="card-question" id="card-question"></div>
+        <div id="answer-text"></div>
+      </div>
+
+      <div id="error-msg"></div>
+    </main>
+
+    <script>
+      const input = document.getElementById("query-input");
+      const submitBtn = document.getElementById("submit");
+      const card = document.getElementById("answer-card");
+      const badge = document.getElementById("pipeline-badge");
+      const spinner = document.getElementById("spinner");
+      const timingEl = document.getElementById("timing");
+      const answerEl = document.getElementById("answer-text");
+      const questionEl = document.getElementById("card-question");
+      const errorEl = document.getElementById("error-msg");
+      const historyEl = document.getElementById("history");
+
+      const MAX_HISTORY = 5;
+      let history = [];
+      let controller = null;
+
+      // ---- Submit on Enter (Shift+Enter for newline) ----
+      input.addEventListener("keydown", (e) => {
+        if (e.key === "Enter" && !e.shiftKey) {
+          e.preventDefault();
+          submitBtn.click();
+        }
+      });
+
+      submitBtn.addEventListener("click", () => {
+        const query = input.value.trim();
+        if (!query) return;
+        runQuery(query);
+      });
+
+      // ---- History chips ----
+      function addToHistory(query) {
+        history = [query, ...history.filter((q) => q !== query)].slice(
+          0,
+          MAX_HISTORY,
+        );
+        renderHistory();
+      }
+
+      function renderHistory() {
+        historyEl.innerHTML = "";
+        history.forEach((q) => {
+          const chip = document.createElement("button");
+          chip.className = "chip";
+          chip.textContent = q;
+          chip.title = q;
+          chip.addEventListener("click", () => runQuery(q));
+          historyEl.appendChild(chip);
+        });
+      }
+
+      // ---- SSE parsing helper ----
+      // EventSource only supports GET, so we use fetch + ReadableStream
+      // and parse the SSE wire format manually.
+      function parseSSEChunk(raw) {
+        const events = [];
+        const blocks = raw.split(/\n\n/);
+        for (const block of blocks) {
+          if (!block.trim()) continue;
+          const lines = block.split("\n");
+          let event = "message",
+            data = "";
+          for (const line of lines) {
+            if (line.startsWith("event: ")) event = line.slice(7).trim();
+            if (line.startsWith("data: ")) data = line.slice(6);
+          }
+          if (data) events.push({ event, data });
+        }
+        return events;
+      }
+
+      // ---- Minimal markdown rendering ----
+      function renderMarkdown(text) {
+        // We receive plain text chunks and build up the full string,
+        // then do a light render pass at the end.
+        return text
+          .replace(/^### (.+)$/gm, '<div class="md-h3">$1</div>')
+          .replace(/\*\*(.+?)\*\*/g, '<span class="md-bold">$1</span>')
+          .replace(/^- (.+)$/gm, '<div class="md-li">• $1</div>');
+      }
+
+      // ---- Main query function ----
+      async function runQuery(query) {
+        // Cancel any in-flight request
+        if (controller) controller.abort();
+        controller = new AbortController();
+
+        // UI: loading state
+        input.value = "";
+        questionEl.textContent = query;
+        input.disabled = true;
+        submitBtn.disabled = true;
+        errorEl.classList.remove("visible");
+        card.classList.add("visible");
+        answerEl.textContent = "";
+        badge.className = "pipeline-badge routing";
+        badge.textContent = "routing…";
+        spinner.classList.add("active");
+        timingEl.textContent = "";
+
+        let rawAnswer = "";
+
+        try {
+          const response = await fetch("/query", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ query }),
+            signal: controller.signal,
+          });
+
+          if (!response.ok) throw new Error(`HTTP ${response.status}`);
+
+          const reader = response.body.getReader();
+          const decoder = new TextDecoder();
+          let buffer = "";
+
+          while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+
+            buffer += decoder.decode(value, { stream: true });
+
+            // Split on double-newline (SSE event boundary) but keep remainder
+            const parts = buffer.split(/\n\n/);
+            buffer = parts.pop(); // last part may be incomplete
+
+            for (const part of parts) {
+              if (!part.trim()) continue;
+              const [parsedEvent] = parseSSEChunk(part + "\n\n");
+              if (!parsedEvent) continue;
+
+              const { event, data } = parsedEvent;
+
+              if (event === "routing") {
+                const { pipeline } = JSON.parse(data);
+                badge.className = `pipeline-badge ${pipeline}`;
+                badge.textContent = pipeline;
+              } else if (event === "token") {
+                rawAnswer += data.replace(/\\n/g, "\n");
+                // For hybrid path: single large chunk arrives at once
+                // For lightrag path: small chunks stream in
+                answerEl.innerHTML = renderMarkdown(rawAnswer);
+              } else if (event === "done") {
+                const { pipeline, total } = JSON.parse(data);
+                spinner.classList.remove("active");
+                timingEl.textContent = `${total.toFixed(1)}s`;
+                badge.className = `pipeline-badge ${pipeline}`;
+                badge.textContent = pipeline;
+              } else if (event === "error") {
+                const { message } = JSON.parse(data);
+                throw new Error(message);
+              }
+            }
+          }
+
+          addToHistory(query);
+        } catch (err) {
+          if (err.name === "AbortError") return;
+          spinner.classList.remove("active");
+          errorEl.textContent = `Error: ${err.message}`;
+          errorEl.classList.add("visible");
+          card.classList.remove("visible");
+        } finally {
+          input.disabled = false;
+          submitBtn.disabled = false;
+          input.focus();
+          controller = null;
+        }
+      }
+    </script>
+  </body>
+</html>

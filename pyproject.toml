@@ -5,6 +5,7 @@ description = "Add your description here"
 requires-python = ">=3.12"
 dependencies = [
     "docling>=2.81.0",
+    "fastapi>=0.135.3",
     "flagembedding",
     "lightrag-hku>=1.4.11",
     "llama-index>=0.14.18",
@@ -14,6 +15,7 @@ dependencies = [
     "llama-index-retrievers-bm25>=0.7.1",
     "marker-pdf>=1.10.2",
     "python-dotenv>=1.2.2",
+    "uvicorn[standard]>=0.42.0",
 ]
 
 [tool.uv.sources]

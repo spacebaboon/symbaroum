@@ -151,25 +151,252 @@ A local, private RAG (Retrieval-Augmented Generation) system that allows a Game 
 
 ---
 
-### Task 4: Simple Web UI
+### Task 4: FastAPI Web UI with Streaming
 
-**Goal**: A basic web interface — nicer than CLI, good learning exercise in serving ML pipelines  
+**Goal**: Serve the GM assistant via a web interface with streaming responses, replacing the CLI REPL  
 **Priority**: Medium  
-**Estimated effort**: 1 session
+**Estimated effort**: 1-2 sessions  
+**Dependencies**: None (can run alongside existing `rag_query.py` CLI)
+
+---
+
+#### Overview
+
+Refactor `rag_query.py` from a top-to-bottom script into a proper FastAPI application with:
+
+- A streaming `POST /query` endpoint using server-sent events (SSE)
+- A single-page HTML frontend served by FastAPI
+- Startup/shutdown lifecycle hooks for index loading
+- Full async pipeline (removing `asyncio.run()` workarounds)
+
+The existing pipeline logic, prompts, and routing should be preserved exactly — this is a serving layer change, not a retrieval change.
+
+---
+
+#### File Structure
+
+```
+symbaroum/
+  api/
+    __init__.py
+    app.py           # FastAPI app, lifespan, /query endpoint
+    pipelines.py     # refactored hybrid + lightrag pipeline functions (async)
+    models.py        # Pydantic request/response models
+  static/
+    index.html       # single-page frontend
+  rag_query.py       # CLI entry point (kept, imports from api/)
+```
+
+---
 
 #### Subtasks
 
-- Choose framework: Gradio (quickest) or FastAPI + minimal HTML (more control)
-- Implement REST endpoint: POST /query → {answer, pipeline, timings}
-- Basic web UI: query input, answer display, pipeline indicator, optional timing breakdown
-- Handle streaming responses for faster perceived performance
-- Consider session history: last N queries visible
-- Git tag: v0.8-webui
+**4.1 — Add dependencies**
 
-#### Notes
+```
+uv add fastapi uvicorn[standard] sse-starlette
+```
 
-- Gradio is the fastest path to a working UI and good for learning
-- FastAPI + minimal HTML is better if you want to understand the serving layer
+`sse-starlette` provides the `EventSourceResponse` class for server-sent events.
+
+---
+
+**4.2 — Create `api/models.py`**
+
+Pydantic models for request/response:
+
+```python
+from pydantic import BaseModel
+from typing import Literal
+
+class QueryRequest(BaseModel):
+    query: str
+
+class QueryMetadata(BaseModel):
+    pipeline: Literal["hybrid", "lightrag"]
+    timings: dict[str, float]
+    total: float
+```
+
+---
+
+**4.3 — Refactor pipelines into `api/pipelines.py`**
+
+Extract all pipeline logic from `rag_query.py` into importable async functions. Key changes from the current script:
+
+- All index loading moved into an `initialise()` async function (called once at startup)
+- `run_hybrid_pipeline()` becomes `async def hybrid_pipeline(query: str) -> AsyncGenerator[str, None]`
+- `run_lightrag_pipeline()` becomes `async def lightrag_pipeline(query: str) -> AsyncGenerator[str, None]`
+- Both yield token chunks as strings for SSE streaming
+- `route_query()` and utility LLM calls use `asyncio.get_event_loop().run_in_executor()` to avoid blocking the event loop (they use the sync Ollama client)
+- All state (indexes, rag instance, retrievers, reranker) held as module-level variables, initialised once
+
+**Hybrid pipeline streaming approach:**
+LlamaIndex's `query_engine.query()` is synchronous. Options:
+
+- Run it in a thread executor and stream the complete response as a single SSE event (simplest)
+- Switch to `astream_chat()` if using a chat engine — yields tokens natively (more complex)
+- Recommended for v0.7: run in executor, emit a "thinking" SSE event while waiting, then emit the full answer. True token streaming can be added later.
+
+**LightRAG streaming approach:**
+LightRAG's `aquery()` supports streaming via `QueryParam(stream=True)` which returns an `AsyncGenerator`. Yield each chunk directly as an SSE event. This gives true token-level streaming for the LightRAG path.
+
+---
+
+**4.4 — Create `api/app.py`**
+
+```python
+from contextlib import asynccontextmanager
+from fastapi import FastAPI
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
+from sse_starlette.sse import EventSourceResponse
+from api.models import QueryRequest
+from api import pipelines
+import json, time
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    await pipelines.initialise()   # load all indexes on startup
+    yield
+    # optional: graceful shutdown of Ollama clients
+
+app = FastAPI(lifespan=lifespan)
+app.mount("/static", StaticFiles(directory="static"), name="static")
+
+@app.get("/")
+async def root():
+    return FileResponse("static/index.html")
+
+@app.post("/query")
+async def query(request: QueryRequest):
+    async def event_stream():
+        total_start = time.time()
+
+        # Route
+        pipeline = await pipelines.route(request.query)
+        yield {"event": "routing", "data": json.dumps({"pipeline": pipeline})}
+
+        # Stream answer
+        timings = {}
+        t = time.time()
+        if pipeline == "lightrag":
+            async for chunk in pipelines.lightrag_pipeline(request.query):
+                yield {"event": "token", "data": chunk}
+            timings["lightrag_query"] = time.time() - t
+        else:
+            async for chunk in pipelines.hybrid_pipeline(request.query):
+                yield {"event": "token", "data": chunk}
+            timings["hybrid"] = time.time() - t
+
+        # Done event with metadata
+        yield {
+            "event": "done",
+            "data": json.dumps({
+                "pipeline": pipeline,
+                "timings": timings,
+                "total": time.time() - total_start,
+            })
+        }
+
+    return EventSourceResponse(event_stream())
+```
+
+---
+
+**4.5 — Create `static/index.html`**
+
+Single self-contained HTML file, no build step, no external JS frameworks. Requirements:
+
+- Text input + submit button
+- Answer display area that appends tokens as they arrive (SSE `token` events)
+- Pipeline badge: shows `hybrid` or `lightrag` once routing event arrives
+- Timing display: shown after `done` event
+- Loading state: disable input + show spinner while query is in flight
+- Query history: last 5 queries shown as clickable chips to re-run
+- Error handling: display friendly message if SSE connection fails
+
+Use the `EventSource` API with `fetch` + `ReadableStream` (since `EventSource` doesn't support POST):
+
+```javascript
+const response = await fetch("/query", {
+  method: "POST",
+  headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({ query }),
+});
+const reader = response.body.getReader();
+// parse SSE lines manually: "event: token\ndata: ...\n\n"
+```
+
+Style: minimal, dark theme, monospace answer font. No CSS frameworks needed.
+
+---
+
+**4.6 — Keep `rag_query.py` as CLI entry point**
+
+Update to import from `api/pipelines.py` rather than duplicating logic:
+
+```python
+# rag_query.py — CLI wrapper
+import asyncio
+from api import pipelines
+
+async def main():
+    await pipelines.initialise()
+    # existing REPL loop, calling pipelines.hybrid_pipeline() / pipelines.lightrag_pipeline()
+
+if __name__ == "__main__":
+    asyncio.run(main())
+```
+
+This ensures CLI and web UI stay in sync — one source of truth for pipeline logic.
+
+---
+
+**4.7 — Update `start.sh`**
+
+Add uvicorn startup:
+
+```bash
+# In start.sh, after starting Ollama instances:
+uvicorn api.app:app --host 0.0.0.0 --port 8000 --reload &
+echo "Web UI: http://localhost:8000"
+```
+
+`--reload` is fine for development; remove for stable use.
+
+---
+
+**4.8 — Update `.env.sample`**
+
+Add:
+
+```
+SYMBAROUM_HOST=0.0.0.0
+SYMBAROUM_PORT=8000
+```
+
+---
+
+#### Testing Checklist
+
+- [ ] `uv run uvicorn api.app:app` starts without errors, indexes load
+- [ ] `GET /` returns the HTML page
+- [ ] `POST /query` with a rules query streams tokens and ends with `done` event
+- [ ] `POST /query` with a relational query routes to lightrag and streams
+- [ ] Frontend displays tokens as they arrive (not all at once after completion)
+- [ ] Pipeline badge appears immediately after routing (before answer streams)
+- [ ] CLI (`uv run rag_query.py`) still works after refactor
+- [ ] `start.sh` brings up all services including uvicorn
+
+---
+
+#### Notes & Decisions
+
+- **True streaming on hybrid path**: LlamaIndex's synchronous query engine makes true token streaming non-trivial. Emitting a single SSE event with the complete answer after running in a thread executor is acceptable for v0.7. The LightRAG path will have real token streaming. Revisit if the UX difference is noticeable.
+- **No authentication**: localhost only, not exposed externally. If WSL port forwarding is needed, add a note but no auth logic required.
+- **CORS**: Not needed for localhost serving from the same FastAPI app. Add if frontend is ever served separately.
+- **Git tag**: `v0.7-webui`
 
 ---
 
